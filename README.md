@@ -1,9 +1,3 @@
-Ran command: `cat C:\Users\damir\IntToSoftEng3\frontend\package.json`
-
-Here is a clear, step-by-step guide you can copy and paste directly into your `README.md` file!
-
-***
-
 ## 🚀 Getting Started
 
 ### Prerequisites
