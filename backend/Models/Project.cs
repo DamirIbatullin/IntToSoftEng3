@@ -33,5 +33,11 @@ namespace EasyLang.Models
 
         [Column("review_hours")]
         public decimal? ReviewHours { get; set; }
+
+        [Column("created_at")]
+        public DateTime? CreatedAt { get; set; }
+
+        [Column("due_date")]
+        public DateTime? DueDate { get; set; }
     }
 }

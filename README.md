@@ -48,8 +48,25 @@ The frontend is a modern React application built with Vite and Tailwind CSS.
 
 ---
 
-### 🔑 Test Accounts
-To test the routing and dashboards, you can register test accounts matching the following roles in the sign-up page:
-* **Project Manager** (Access to Project Watchlist & Creation form)
-* **Translator** (Access to assigned Activity tracking)
-* **Chief Editor** (Access to budget review metrics)
+### 🔑 Pre-configured Accounts & Roles
+You can log in directly using the 1-click test buttons on the login page or using the following credentials:
+* **Translator**: Initials: `MZ` | Password: `Madi2007` (Access to Translator Workspace, Live Task Search, and 2-decimal Daily Work Logging)
+* **Project Manager**: Initials: `DI` | Password: `Damir2006` (Access to Project Watchlist & Activity Creation form)
+* **Chief Editor**: Initials: `DD` | Password: `Dulat2007` (Access to Review Budgeting & Quality Assurance metrics)
+
+---
+
+## 📦 Sprint 2 (Iteration 2): Authentication & Core Translator Loop
+* **Story #3 - Authentication & Role-Based Navigation**:
+  - Secure JWT authentication with session validation (`/api/auth/login`, `/api/auth/me`).
+  - Automatic role-based routing protecting private workspace views.
+  - Fully responsive layout for mobile, tablet, and desktop viewports.
+  - Distinct landing views tailored for Translators vs. Managers.
+* **Story #4 - Live Task Search**:
+  - Live fuzzy matching search bar in the Translator workspace.
+  - Backend search algorithm supporting project numbers, titles, and typo-tolerant Levenshtein queries.
+* **Story #5 - Log Daily Progress**:
+  - Two-decimal precision daily log input (`0.01%` to `100.00%`).
+  - Auto-calculating math preview, quick presets, and cumulative progress tracking.
+  - Endpoints (`POST /api/activities/{id}/daily-logs`, `GET /api/activities/{id}/daily-logs`, `DELETE /api/activities/{id}/daily-logs/{logId}`).
+  - PostgreSQL `DailyWorkRecord` database table for audit and history logging.
