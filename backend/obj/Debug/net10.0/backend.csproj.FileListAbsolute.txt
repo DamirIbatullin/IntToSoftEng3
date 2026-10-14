@@ -41,7 +41,6 @@ C:\Users\damir\IntToSoftEng3\backend\obj\Debug\net10.0\staticwebassets.build.jso
 C:\Users\damir\IntToSoftEng3\backend\obj\Debug\net10.0\staticwebassets.development.json
 C:\Users\damir\IntToSoftEng3\backend\obj\Debug\net10.0\staticwebassets.build.endpoints.json
 C:\Users\damir\IntToSoftEng3\backend\obj\Debug\net10.0\swae.build.ex.cache
-C:\Users\damir\IntToSoftEng3\backend\obj\Debug\net10.0\staticwebassets.upToDateCheck.txt
 C:\Users\damir\IntToSoftEng3\backend\obj\Debug\net10.0\backend.csproj.Up2Date
 C:\Users\damir\IntToSoftEng3\backend\obj\Debug\net10.0\backend.dll
 C:\Users\damir\IntToSoftEng3\backend\obj\Debug\net10.0\refint\backend.dll

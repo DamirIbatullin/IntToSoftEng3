@@ -5,11 +5,23 @@ export default function Register({ onRegisterSuccess, onSwitchToLogin }) {
   const [password, setPassword] = useState('');
   const [role, setRole] = useState('Translator');
   const [errorMessage, setErrorMessage] = useState('');
+  const [errors, setErrors] = useState({});
   const [isLoading, setIsLoading] = useState(false);
 
   const handleSubmit = async (e) => {
     e.preventDefault();
     setErrorMessage('');
+    
+    const newErrors = {};
+    if (!initials.trim()) newErrors.initials = 'Initials are required.';
+    if (!password.trim()) newErrors.password = 'Password is required.';
+    
+    if (Object.keys(newErrors).length > 0) {
+      setErrors(newErrors);
+      return;
+    }
+    
+    setErrors({});
     setIsLoading(true);
 
     try {
@@ -60,7 +72,7 @@ export default function Register({ onRegisterSuccess, onSwitchToLogin }) {
           </div>
         )}
 
-        <form onSubmit={handleSubmit} className="space-y-5">
+        <form onSubmit={handleSubmit} className="space-y-5" noValidate>
           <div>
             <div className="flex justify-between mb-1.5">
               <label className="text-sm font-semibold text-slate-800">User Initials</label>
@@ -69,12 +81,17 @@ export default function Register({ onRegisterSuccess, onSwitchToLogin }) {
             <input 
               type="text" 
               value={initials}
-              onChange={(e) => setInitials(e.target.value.toUpperCase())}
+              onChange={(e) => {
+                setInitials(e.target.value.toUpperCase());
+                if (errors.initials) setErrors(prev => ({ ...prev, initials: '' }));
+              }}
               placeholder="e.g., ABCD" 
-              required 
               maxLength="4"
-              className="w-full px-4 py-2.5 border border-slate-200 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none transition-all text-sm"
+              className={`w-full px-4 py-2.5 border rounded-lg focus:ring-2 outline-none transition-all text-sm ${
+                errors.initials ? 'border-red-500 focus:ring-red-500 text-red-900 bg-red-50' : 'border-slate-200 focus:ring-indigo-500'
+              }`}
             />
+            {errors.initials && <p className="mt-1 text-sm text-red-500 font-medium">{errors.initials}</p>}
           </div>
           
           <div>
@@ -82,11 +99,16 @@ export default function Register({ onRegisterSuccess, onSwitchToLogin }) {
             <input 
               type="password" 
               value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              required 
-              className="w-full px-4 py-2.5 border border-slate-200 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none transition-all text-sm tracking-widest" 
-              placeholder="••••••••"
+              onChange={(e) => {
+                setPassword(e.target.value);
+                if (errors.password) setErrors(prev => ({ ...prev, password: '' }));
+              }}
+              placeholder="••••••••" 
+              className={`w-full px-4 py-2.5 border rounded-lg focus:ring-2 outline-none transition-all text-sm tracking-widest ${
+                errors.password ? 'border-red-500 focus:ring-red-500 text-red-900 bg-red-50' : 'border-slate-200 focus:ring-indigo-500'
+              }`}
             />
+            {errors.password && <p className="mt-1 text-sm text-red-500 font-medium">{errors.password}</p>}
           </div>
 
           <div>

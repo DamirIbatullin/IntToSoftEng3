@@ -46,4 +46,21 @@ app.UseAuthentication();
 app.UseAuthorization();
 app.MapControllers();
 
+// Ensure DB columns exist for CreatedAt and DueDate
+using (var scope = app.Services.CreateScope())
+{
+    var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+    try
+    {
+        db.Database.ExecuteSqlRaw(@"
+            ALTER TABLE ""Project"" ADD COLUMN IF NOT EXISTS created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP;
+            ALTER TABLE ""Project"" ADD COLUMN IF NOT EXISTS due_date DATE;
+        ");
+    }
+    catch (Exception ex)
+    {
+        Console.WriteLine($"DB Migration notice: {ex.Message}");
+    }
+}
+
 app.Run();
