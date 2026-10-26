@@ -3,13 +3,23 @@ import React, { useState, useEffect } from 'react';
 export default function Dashboard({ userProfile, onLogout }) {
   const [projects, setProjects] = useState([]);
   const [translatorsList, setTranslatorsList] = useState([]);
+  const [chiefEditorsList, setChiefEditorsList] = useState([]);
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [errors, setErrors] = useState({});
   const [statusFilter, setStatusFilter] = useState('All');
   const [currentPage, setCurrentPage] = useState(1);
+  const [isAttentionExpanded, setIsAttentionExpanded] = useState(false);
   const pageSize = 5;
-  
+
+  // Story #8: Reassign Editors Modal state
+  const [reassignModalProject, setReassignModalProject] = useState(null);
+  const [leadEditorInput, setLeadEditorInput] = useState('');
+  const [secondaryEditorInput, setSecondaryEditorInput] = useState('');
+  const [reassignmentNoteInput, setReassignmentNoteInput] = useState('');
+  const [isSubmittingReassign, setIsSubmittingReassign] = useState(false);
+  const [reassignFeedback, setReassignFeedback] = useState({ error: '', success: '' });
+
   const [formData, setFormData] = useState({
     name: '',
     dueDate: '',
@@ -23,34 +33,46 @@ export default function Dashboard({ userProfile, onLogout }) {
   });
 
   useEffect(() => {
-    // Fetch Translators
-    const fetchTranslators = async () => {
-      try {
-        const res = await fetch('http://localhost:5156/api/employees/translators');
-        if (res.ok) {
-          const data = await res.json();
-          setTranslatorsList(data);
-        }
-      } catch (err) {
-        console.error("Could not fetch translators", err);
-      }
-    };
     fetchTranslators();
-
-    // Fetch existing projects
-    const fetchProjects = async () => {
-      try {
-        const res = await fetch('http://localhost:5156/api/projects');
-        if (res.ok) {
-          const data = await res.json();
-          setProjects(data);
-        }
-      } catch (err) {
-        console.error("Could not fetch projects", err);
-      }
-    };
+    fetchChiefEditors();
     fetchProjects();
   }, []);
+
+  const fetchTranslators = async () => {
+    try {
+      const res = await fetch('http://localhost:5156/api/employees/translators');
+      if (res.ok) {
+        const data = await res.json();
+        setTranslatorsList(data);
+      }
+    } catch (err) {
+      console.error('Could not fetch translators', err);
+    }
+  };
+
+  const fetchChiefEditors = async () => {
+    try {
+      const res = await fetch('http://localhost:5156/api/employees/chief-editors');
+      if (res.ok) {
+        const data = await res.json();
+        setChiefEditorsList(data);
+      }
+    } catch (err) {
+      console.error('Could not fetch chief editors', err);
+    }
+  };
+
+  const fetchProjects = async () => {
+    try {
+      const res = await fetch('http://localhost:5156/api/projects');
+      if (res.ok) {
+        const data = await res.json();
+        setProjects(data);
+      }
+    } catch (err) {
+      console.error('Could not fetch projects', err);
+    }
+  };
 
   const handleInputChange = (e) => {
     const { name, value } = e.target;
@@ -99,8 +121,10 @@ export default function Dashboard({ userProfile, onLogout }) {
       name: formData.name.trim(),
       primaryTranslatorId: parseInt(formData.primaryTranslatorId),
       leadChiefEditorId: parseInt(formData.leadChiefEditorId),
+      backupChiefEditorId: formData.backupChiefEditorId ? parseInt(formData.backupChiefEditorId) : null,
       complexityLevel: formData.complexityLevel,
       dueDate: formData.dueDate,
+      estimatedHours: formData.estimatedHours ? parseFloat(formData.estimatedHours) : null,
       reviewHours: formData.reviewHours ? parseFloat(formData.reviewHours) : null
     };
 
@@ -129,35 +153,157 @@ export default function Dashboard({ userProfile, onLogout }) {
         });
         
         setIsModalOpen(false);
-        // Refresh projects from backend to get real DB sync
-        const res = await fetch('http://localhost:5156/api/projects');
-        if (res.ok) {
-          const data = await res.json();
-          setProjects(data);
-        }
+        fetchProjects();
+        fetchChiefEditors();
       } else {
-        console.error("Failed to create project");
+        console.error('Failed to create project');
       }
     } catch (err) {
-      console.error("Error connecting to backend", err);
+      console.error('Error connecting to backend', err);
+    }
+  };
+
+  // Story #8: Open Reassign Editors Modal
+  const openReassignModal = (project) => {
+    setReassignModalProject(project);
+    setLeadEditorInput((project.chiefEditorId || 3).toString());
+    setSecondaryEditorInput(project.secondaryChiefEditorId ? project.secondaryChiefEditorId.toString() : '');
+    setReassignmentNoteInput(project.reassignmentNote || '');
+    setReassignFeedback({ error: '', success: '' });
+  };
+
+  const closeReassignModal = () => {
+    setReassignModalProject(null);
+    setReassignFeedback({ error: '', success: '' });
+  };
+
+  const handleSaveReassignment = async (e) => {
+    e.preventDefault();
+    if (!reassignModalProject) return;
+
+    const leadId = parseInt(leadEditorInput);
+    const secId = secondaryEditorInput ? parseInt(secondaryEditorInput) : null;
+
+    if (secId && secId === leadId) {
+      setReassignFeedback({
+        error: 'Temporary / Secondary Chief Editor must be different from the Lead Chief Editor.',
+        success: ''
+      });
+      return;
+    }
+
+    setIsSubmittingReassign(true);
+    setReassignFeedback({ error: '', success: '' });
+
+    try {
+      const token = localStorage.getItem('easyLangToken');
+      const res = await fetch(`http://localhost:5156/api/projects/${reassignModalProject.projectId}/reassign-editor`, {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        },
+        body: JSON.stringify({
+          chiefEditorId: leadId,
+          secondaryChiefEditorId: secId,
+          reassignmentNote: reassignmentNoteInput.trim() || null
+        })
+      });
+
+      const data = await res.json();
+      if (res.ok) {
+        setReassignFeedback({
+          error: '',
+          success: data.message || 'Editor allocation and database permissions updated successfully!'
+        });
+        await fetchProjects();
+        await fetchChiefEditors();
+        setTimeout(() => {
+          closeReassignModal();
+        }, 900);
+      } else {
+        setReassignFeedback({ error: data.error || 'Failed to reassign editor.', success: '' });
+      }
+    } catch (err) {
+      setReassignFeedback({ error: 'Network error connecting to backend.', success: '' });
+    } finally {
+      setIsSubmittingReassign(false);
     }
   };
 
   const filteredProjects = projects.filter(p => {
+    const matchesStatus = statusFilter === 'All' || p.status === statusFilter;
+    if (!matchesStatus) return false;
+
     if (!searchQuery.trim()) return true;
     const q = searchQuery.toLowerCase().trim();
     return (
       p.id?.toString().includes(q) ||
       p.name?.toLowerCase().includes(q) ||
-      p.translator?.toLowerCase().includes(q)
+      p.translator?.toLowerCase().includes(q) ||
+      p.chiefEditor?.toLowerCase().includes(q) ||
+      p.secondaryChiefEditor?.toLowerCase().includes(q)
     );
   });
+
+  const attentionProjects = projects.filter(
+    p => p.complexity === 'High' || p.status === 'In Review' || p.status === 'Revision Requested'
+  );
 
   const totalProjects = filteredProjects.length;
   const totalPages = Math.max(1, Math.ceil(totalProjects / pageSize));
   const startIndex = (currentPage - 1) * pageSize;
   const endIndex = Math.min(startIndex + pageSize, totalProjects);
   const currentProjects = filteredProjects.slice(startIndex, endIndex);
+
+  const renderProjectStatusBadge = (project) => {
+    if (project.status === 'In Review') {
+      return (
+        <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-semibold bg-purple-50 text-purple-700 border border-purple-200 whitespace-nowrap">
+          <span className="w-1.5 h-1.5 rounded-full bg-purple-500 shrink-0" />
+          In Review
+        </span>
+      );
+    }
+    if (project.status === 'Revision Requested') {
+      return (
+        <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-semibold bg-red-50 text-red-700 border border-red-200 whitespace-nowrap">
+          <span className="w-1.5 h-1.5 rounded-full bg-red-500 shrink-0" />
+          Revision Requested
+        </span>
+      );
+    }
+    if (project.status === 'Approved') {
+      return (
+        <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200 whitespace-nowrap">
+          <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 shrink-0" />
+          Approved
+        </span>
+      );
+    }
+    if (project.status === 'On Track') {
+      return (
+        <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200 whitespace-nowrap">
+          <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 shrink-0" />
+          On Track
+        </span>
+      );
+    }
+    if (project.status === 'Completed') {
+      return (
+        <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-semibold bg-blue-50 text-blue-700 border border-blue-200 whitespace-nowrap">
+          <span className="w-1.5 h-1.5 rounded-full bg-blue-500 shrink-0" />
+          Completed
+        </span>
+      );
+    }
+    return (
+      <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-semibold bg-slate-100 text-slate-600 border border-slate-200 whitespace-nowrap">
+        <span className="w-1.5 h-1.5 rounded-full bg-slate-400 shrink-0" />
+        Pending Start
+      </span>
+    );
+  };
 
   return (
     <div className="flex min-h-screen bg-[#f8fafc] font-sans text-slate-800">
@@ -200,22 +346,57 @@ export default function Dashboard({ userProfile, onLogout }) {
             Project Manager Portal
           </h1>
           <p className="text-xs sm:text-sm text-slate-500 mt-1">
-            Action items first, then watchlist and capacity overview.
+            Action items first, then watchlist, Friday review estimates, and Chief Editor capacity overview.
           </p>
         </header>
 
-        {/* Needs Attention Card */}
+        {/* Needs Attention Card (Interactive for Bottleneck / Editor Reassignment) */}
         <div className="bg-white rounded-2xl border border-slate-200 p-4 sm:p-5 mb-6 shadow-2xs">
-          <div className="flex items-center justify-between text-xs sm:text-sm font-bold text-slate-900">
+          <div
+            onClick={() => setIsAttentionExpanded(prev => !prev)}
+            className="flex items-center justify-between text-xs sm:text-sm font-bold text-slate-900 cursor-pointer"
+          >
             <div className="flex items-center gap-2">
               <span className="text-amber-500">⚠️</span>
-              <span>Needs Attention ({projects.filter(p => p.complexity === 'High').length})</span>
-              <span className="text-slate-400 font-normal">▾</span>
+              <span>Needs Attention ({attentionProjects.length})</span>
+              <span className="text-slate-400 font-normal">{isAttentionExpanded ? '▴' : '▾'}</span>
             </div>
+            <span className="text-xs text-indigo-600 font-bold hover:underline">
+              {isAttentionExpanded ? 'Hide Bottlenecks' : 'Review & Reassign Editors'}
+            </span>
           </div>
           <p className="text-xs text-slate-500 mt-1">
-            {projects.filter(p => p.complexity === 'High').length} items need a decision this week.
+            {attentionProjects.length} high-complexity or Friday review items may need temporary Chief Editor allocation this week.
           </p>
+
+          {isAttentionExpanded && attentionProjects.length > 0 && (
+            <div className="mt-4 pt-3 border-t border-slate-100 space-y-2 max-h-60 overflow-y-auto">
+              {attentionProjects.slice(0, 6).map((proj) => (
+                <div key={proj.projectId} className="p-3 rounded-xl bg-slate-50 border border-slate-100 flex flex-col sm:flex-row sm:items-center justify-between gap-2 text-xs">
+                  <div>
+                    <span className="font-bold text-indigo-600 mr-2">#{proj.id}</span>
+                    <span className="font-bold text-slate-900">{proj.name}</span>
+                    <span className="text-slate-500 ml-2">
+                      &bull; Lead CE: <strong>{proj.chiefEditor || 'DD'}</strong>
+                      {proj.secondaryChiefEditor && (
+                        <span className="text-indigo-600 font-bold"> + {proj.secondaryChiefEditor} (Temp)</span>
+                      )}
+                      {proj.remainingHoursEstimate != null && (
+                        <span className="text-amber-700 font-bold"> &bull; Est. {proj.remainingHoursEstimate}h remaining</span>
+                      )}
+                    </span>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => openReassignModal(proj)}
+                    className="px-3 py-1.5 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 font-bold rounded-lg border border-indigo-200 transition-colors shrink-0 self-start sm:self-center cursor-pointer"
+                  >
+                    Reassign / Share Editor
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
         </div>
 
         {/* Project Watchlist Card */}
@@ -231,7 +412,7 @@ export default function Dashboard({ userProfile, onLogout }) {
             <div className="flex flex-wrap items-center gap-3">
               <button 
                 onClick={() => setIsModalOpen(true)}
-                className="bg-[#4f46e5] hover:bg-[#4338ca] text-white px-4 py-2 rounded-xl text-xs font-bold shadow-xs transition-colors flex items-center gap-1.5"
+                className="bg-[#4f46e5] hover:bg-[#4338ca] text-white px-4 py-2 rounded-xl text-xs font-bold shadow-xs transition-colors flex items-center gap-1.5 cursor-pointer"
               >
                 + Create Project
               </button>
@@ -264,20 +445,25 @@ export default function Dashboard({ userProfile, onLogout }) {
               >
                 <option value="All">Status: All</option>
                 <option value="On Track">On Track</option>
+                <option value="In Review">In Review (Friday)</option>
+                <option value="Revision Requested">Revision Requested</option>
+                <option value="Approved">Approved</option>
+                <option value="Pending Start">Pending Start</option>
               </select>
             </div>
           </div>
 
-          {/* Table matching Figma with 5 per page */}
+          {/* Table matching Figma with 5 per page + Story #8 Editor Allocation */}
           <div className="overflow-x-auto">
             <table className="w-full text-left border-collapse">
               <thead>
                 <tr className="border-b border-slate-100 text-[11px] font-bold text-slate-400 uppercase tracking-wider bg-slate-50/50">
                   <th className="py-3 px-5">Project</th>
-                  <th className="py-3 px-5">Responsible Translator</th>
+                  <th className="py-3 px-5">Translator</th>
+                  <th className="py-3 px-5">Chief Editor(s)</th>
                   <th className="py-3 px-5 w-36">Progress</th>
                   <th className="py-3 px-5 min-w-[130px] whitespace-nowrap">Status</th>
-                  <th className="py-3 px-5">Expected Total</th>
+                  <th className="py-3 px-5">Expected / Est.</th>
                   <th className="py-3 px-5">Due Date</th>
                   <th className="py-3 px-5 text-right">Actions</th>
                 </tr>
@@ -285,7 +471,7 @@ export default function Dashboard({ userProfile, onLogout }) {
               <tbody className="divide-y divide-slate-100">
                 {currentProjects.length === 0 ? (
                   <tr>
-                    <td colSpan="7" className="py-12 text-center text-slate-400 text-xs">
+                    <td colSpan="8" className="py-12 text-center text-slate-400 text-xs">
                       No active projects found.
                     </td>
                   </tr>
@@ -313,6 +499,22 @@ export default function Dashboard({ userProfile, onLogout }) {
                           {project.translator}
                         </td>
 
+                        <td className="py-4 px-5 whitespace-nowrap">
+                          <div className="flex items-center gap-1.5">
+                            <span className="px-2 py-0.5 rounded bg-slate-100 text-slate-800 text-xs font-bold border border-slate-200">
+                              {project.chiefEditor || 'DD'}
+                            </span>
+                            {project.secondaryChiefEditor && (
+                              <span
+                                className="px-2 py-0.5 rounded bg-indigo-50 text-indigo-700 text-xs font-bold border border-indigo-200"
+                                title={project.reassignmentNote || 'Temporary Secondary Editor'}
+                              >
+                                + {project.secondaryChiefEditor} (Temp)
+                              </span>
+                            )}
+                          </div>
+                        </td>
+
                         <td className="py-4 px-5">
                           <div className="flex items-center gap-2">
                             <span className="text-xs font-bold text-slate-800">
@@ -321,7 +523,7 @@ export default function Dashboard({ userProfile, onLogout }) {
                             <div className="flex-1 bg-slate-100 h-1.5 rounded-full overflow-hidden">
                               <div 
                                 className={`h-full rounded-full transition-all duration-300 ${
-                                  project.status === 'Completed' ? 'bg-emerald-500' : 'bg-indigo-600'
+                                  project.status === 'Completed' || project.status === 'Approved' ? 'bg-emerald-500' : 'bg-indigo-600'
                                 }`}
                                 style={{ width: `${Math.min(100, progressNum)}%` }}
                               />
@@ -329,28 +531,17 @@ export default function Dashboard({ userProfile, onLogout }) {
                           </div>
                         </td>
 
-                        {/* Status Column - dynamically synced with daily work logging */}
                         <td className="py-4 px-5 min-w-[130px] whitespace-nowrap">
-                          {project.status === 'On Track' ? (
-                            <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200 whitespace-nowrap">
-                              <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 shrink-0" />
-                              On Track
-                            </span>
-                          ) : project.status === 'Completed' ? (
-                            <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-semibold bg-blue-50 text-blue-700 border border-blue-200 whitespace-nowrap">
-                              <span className="w-1.5 h-1.5 rounded-full bg-blue-500 shrink-0" />
-                              Completed
-                            </span>
-                          ) : (
-                            <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-semibold bg-slate-100 text-slate-600 border border-slate-200 whitespace-nowrap">
-                              <span className="w-1.5 h-1.5 rounded-full bg-slate-400 shrink-0" />
-                              Pending Start
-                            </span>
-                          )}
+                          {renderProjectStatusBadge(project)}
                         </td>
 
-                        <td className="py-4 px-5 text-xs font-bold text-slate-800">
-                          {project.reviewHours != null ? `${project.reviewHours}h` : '68h'}
+                        <td className="py-4 px-5 text-xs font-bold text-slate-800 whitespace-nowrap">
+                          <span>{project.reviewHours != null ? `${project.reviewHours}h` : '68h'}</span>
+                          {project.remainingHoursEstimate != null && (
+                            <span className="block text-[10px] font-semibold text-indigo-600">
+                              Rem. Est: {project.remainingHoursEstimate}h
+                            </span>
+                          )}
                         </td>
 
                         <td className="py-4 px-5 text-xs text-slate-600 font-medium whitespace-nowrap">
@@ -358,9 +549,13 @@ export default function Dashboard({ userProfile, onLogout }) {
                         </td>
 
                         <td className="py-4 px-5 text-right whitespace-nowrap">
-                          <span className="text-xs font-bold text-indigo-600 hover:text-indigo-800 cursor-pointer">
-                            [Details &rarr;]
-                          </span>
+                          <button
+                            type="button"
+                            onClick={() => openReassignModal(project)}
+                            className="text-xs font-bold text-indigo-600 hover:text-indigo-800 cursor-pointer hover:underline"
+                          >
+                            [Reassign / Details &rarr;]
+                          </button>
                         </td>
                       </tr>
                     );
@@ -432,7 +627,177 @@ export default function Dashboard({ userProfile, onLogout }) {
 
       </div>
 
-      {/* Modal: Create New Activity matching Figma popup exactly */}
+      {/* Story #8: Reassign Editors & Project Review Allocation Modal */}
+      {reassignModalProject && (
+        <div className="fixed inset-0 bg-slate-900/60 z-50 flex items-center justify-center p-4 backdrop-blur-xs overflow-y-auto">
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg overflow-hidden my-auto border border-slate-100 animate-in fade-in zoom-in-95 duration-200">
+            
+            {/* Header */}
+            <div className="bg-gradient-to-r from-indigo-600 to-indigo-700 p-5 sm:p-6 text-white relative">
+              <button
+                type="button"
+                onClick={closeReassignModal}
+                className="absolute top-4 right-4 text-white/80 hover:text-white bg-white/10 hover:bg-white/20 rounded-full w-8 h-8 flex items-center justify-center transition-all"
+              >
+                ✕
+              </button>
+              <div className="inline-block px-2.5 py-0.5 rounded-full text-xs font-semibold bg-white/20 text-white mb-2">
+                Story #8 &bull; Editorial Workload Allocation
+              </div>
+              <h3 className="text-xl font-bold tracking-tight">
+                Reassign Chief Editors &amp; Share Review Load
+              </h3>
+              <p className="text-indigo-100 text-xs mt-1">
+                Project #{reassignModalProject.id}: {reassignModalProject.name}
+              </p>
+            </div>
+
+            <form onSubmit={handleSaveReassignment} noValidate className="p-5 sm:p-6 space-y-4">
+              {reassignFeedback.error && (
+                <div className="p-3 bg-red-50 border border-red-200 text-red-600 text-xs rounded-xl font-semibold">
+                  {reassignFeedback.error}
+                </div>
+              )}
+              {reassignFeedback.success && (
+                <div className="p-3 bg-emerald-50 border border-emerald-200 text-emerald-700 text-xs rounded-xl font-semibold">
+                  {reassignFeedback.success}
+                </div>
+              )}
+
+              {/* Project Summary Box */}
+              <div className="p-3.5 rounded-xl bg-slate-50 border border-slate-200 grid grid-cols-3 gap-2 text-xs">
+                <div>
+                  <span className="text-slate-400 block">Translator</span>
+                  <strong className="text-slate-800">{reassignModalProject.translator}</strong>
+                </div>
+                <div>
+                  <span className="text-slate-400 block">Status &amp; Progress</span>
+                  <strong className="text-slate-800">{reassignModalProject.status} ({parseFloat(reassignModalProject.progress || 0).toFixed(0)}%)</strong>
+                </div>
+                <div>
+                  <span className="text-slate-400 block">Remaining Est.</span>
+                  <strong className="text-indigo-700">
+                    {reassignModalProject.remainingHoursEstimate != null ? `${reassignModalProject.remainingHoursEstimate}h` : 'Pending Friday'}
+                  </strong>
+                </div>
+              </div>
+
+              {/* Chief Editor Availability Overview */}
+              <div>
+                <label className="block text-xs font-bold text-slate-700 mb-1.5">
+                  Chief Editor Capacity &amp; Availability
+                </label>
+                <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+                  {chiefEditorsList.map((ce) => (
+                    <div
+                      key={ce.id}
+                      onClick={() => {
+                        if (ce.id.toString() !== leadEditorInput) {
+                          setSecondaryEditorInput(ce.id.toString());
+                        }
+                      }}
+                      className={`p-2.5 rounded-xl border text-xs cursor-pointer transition-all ${
+                        secondaryEditorInput === ce.id.toString()
+                          ? 'border-indigo-600 bg-indigo-50/70 ring-1 ring-indigo-600'
+                          : 'border-slate-200 bg-white hover:bg-slate-50'
+                      }`}
+                    >
+                      <div className="flex items-center justify-between">
+                        <span className="font-extrabold text-slate-900">{ce.initials}</span>
+                        <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded ${
+                          ce.isFree
+                            ? 'bg-emerald-50 text-emerald-700 border border-emerald-200'
+                            : 'bg-amber-50 text-amber-700 border border-amber-200'
+                        }`}>
+                          {ce.availabilityStatus}
+                        </span>
+                      </div>
+                      <p className="text-[10px] text-slate-500 mt-1 truncate">
+                        {ce.totalAssignedProjects} projects &bull; {ce.totalReviewHours}h
+                      </p>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              {/* Dropdown 1: Primary Lead Chief Editor */}
+              <div>
+                <label className="block text-xs font-bold text-slate-700 mb-1">
+                  Lead Chief Editor (Primary) <span className="text-red-500">*</span>
+                </label>
+                <select
+                  value={leadEditorInput}
+                  onChange={(e) => setLeadEditorInput(e.target.value)}
+                  className="w-full px-3.5 py-2.5 text-xs sm:text-sm font-semibold border border-slate-200 rounded-xl bg-white text-slate-900 outline-none focus:ring-2 focus:ring-indigo-500"
+                >
+                  {chiefEditorsList.map(ce => (
+                    <option key={ce.id} value={ce.id}>
+                      {ce.displayName} — {ce.availabilityStatus} ({ce.totalAssignedProjects} active projects)
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              {/* Dropdown 2: Temporary / Secondary Chief Editor for Bottleneck Relief */}
+              <div>
+                <label className="block text-xs font-bold text-slate-700 mb-1">
+                  Temporary / Secondary Chief Editor (Bottleneck Relief)
+                </label>
+                <select
+                  value={secondaryEditorInput}
+                  onChange={(e) => setSecondaryEditorInput(e.target.value)}
+                  className="w-full px-3.5 py-2.5 text-xs sm:text-sm font-semibold border border-indigo-200 rounded-xl bg-indigo-50/30 text-slate-900 outline-none focus:ring-2 focus:ring-indigo-500"
+                >
+                  <option value="">None (Single Lead Editor only)</option>
+                  {chiefEditorsList
+                    .filter(ce => ce.id.toString() !== leadEditorInput)
+                    .map(ce => (
+                      <option key={ce.id} value={ce.id}>
+                        {ce.displayName} — {ce.availabilityStatus} ({ce.totalAssignedProjects} projects)
+                      </option>
+                    ))}
+                </select>
+                <p className="text-[11px] text-slate-500 mt-1">
+                  Grants secondary editor database permissions (<code className="text-indigo-600">ProjectEditorAccess</code>) to review submissions, log defects, and toggle task status.
+                </p>
+              </div>
+
+              {/* Reassignment Note */}
+              <div>
+                <label className="block text-xs font-bold text-slate-700 mb-1">
+                  Reassignment / Handover Note <span className="text-slate-400 font-normal">(optional)</span>
+                </label>
+                <input
+                  type="text"
+                  value={reassignmentNoteInput}
+                  onChange={(e) => setReassignmentNoteInput(e.target.value)}
+                  placeholder="e.g., Temporary Friday bottleneck support for high-complexity legal review"
+                  className="w-full px-3.5 py-2 text-xs sm:text-sm border border-slate-200 rounded-xl outline-none focus:ring-2 focus:ring-indigo-500 text-slate-800"
+                />
+              </div>
+
+              <div className="pt-3 border-t border-slate-100 flex items-center justify-end gap-2">
+                <button
+                  type="button"
+                  onClick={closeReassignModal}
+                  className="px-4 py-2 border border-slate-200 text-slate-600 hover:bg-slate-50 text-xs font-bold rounded-xl"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={isSubmittingReassign}
+                  className="px-5 py-2.5 bg-[#4f46e5] hover:bg-[#4338ca] text-white text-xs font-bold rounded-xl shadow-xs disabled:opacity-50 cursor-pointer"
+                >
+                  {isSubmittingReassign ? 'Updating Allocation...' : 'Save Editor Allocation'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Modal: Create New Project matching Figma popup */}
       {isModalOpen && (
         <div className="fixed inset-0 bg-slate-900/60 z-50 flex items-center justify-center p-4 backdrop-blur-xs overflow-y-auto">
           <div className="bg-white rounded-2xl shadow-2xl w-full max-w-[620px] overflow-hidden my-auto border border-slate-100 animate-in fade-in zoom-in-95 duration-200">
@@ -517,7 +882,13 @@ export default function Dashboard({ userProfile, onLogout }) {
                     }`}
                   >
                     <option value="" disabled>Select lead reviewer</option>
-                    <option value="3">DD (Chief Editor)</option>
+                    {chiefEditorsList.length > 0 ? (
+                      chiefEditorsList.map(ce => (
+                        <option key={ce.id} value={ce.id}>{ce.displayName}</option>
+                      ))
+                    ) : (
+                      <option value="3">DD (Chief Editor)</option>
+                    )}
                   </select>
                   {errors.leadChiefEditorId && <p className="mt-1 text-xs text-red-500 font-semibold">{errors.leadChiefEditorId}</p>}
                 </div>
@@ -544,7 +915,7 @@ export default function Dashboard({ userProfile, onLogout }) {
 
                 <div>
                   <label className="block text-xs font-bold text-slate-700 mb-1.5">
-                    Backup / Additional Chief Editor
+                    Backup / Secondary Chief Editor
                   </label>
                   <select 
                     name="backupChiefEditorId"
@@ -553,7 +924,9 @@ export default function Dashboard({ userProfile, onLogout }) {
                     className="w-full px-3.5 py-2.5 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none text-xs sm:text-sm bg-white text-slate-500"
                   >
                     <option value="">Optional</option>
-                    <option value="3">DD (Dulat)</option>
+                    {chiefEditorsList.map(ce => (
+                      <option key={ce.id} value={ce.id}>{ce.displayName}</option>
+                    ))}
                   </select>
                 </div>
               </div>

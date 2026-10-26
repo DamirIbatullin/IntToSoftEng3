@@ -18,7 +18,7 @@ namespace EasyLang.Models
         [Required]
         [Column("name")]
         [StringLength(100)]
-        public string Name { get; set; }
+        public string Name { get; set; } = string.Empty;
 
         [Required]
         [Column("project_manager_id")]
@@ -26,6 +26,15 @@ namespace EasyLang.Models
 
         [Column("chief_editor_id")]
         public int? ChiefEditorId { get; set; }
+
+        [Column("secondary_chief_editor_id")]
+        public int? SecondaryChiefEditorId { get; set; }
+
+        [Column("reassignment_note")]
+        public string? ReassignmentNote { get; set; }
+
+        [Column("reassigned_at")]
+        public DateTime? ReassignedAt { get; set; }
 
         [Column("complexity_level")]
         [StringLength(20)]

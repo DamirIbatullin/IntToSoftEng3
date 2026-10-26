@@ -47,3 +47,11 @@ C:\Users\damir\IntToSoftEng3\backend\obj\Debug\net10.0\refint\backend.dll
 C:\Users\damir\IntToSoftEng3\backend\obj\Debug\net10.0\backend.pdb
 C:\Users\damir\IntToSoftEng3\backend\obj\Debug\net10.0\backend.genruntimeconfig.cache
 C:\Users\damir\IntToSoftEng3\backend\obj\Debug\net10.0\ref\backend.dll
+C:\Users\damir\.gemini\antigravity\brain\d3990448-6658-4e3c-8e22-82fd51000b0e\scratch\build_verify\appsettings.Development.json
+C:\Users\damir\.gemini\antigravity\brain\d3990448-6658-4e3c-8e22-82fd51000b0e\scratch\build_verify\appsettings.json
+C:\Users\damir\.gemini\antigravity\brain\d3990448-6658-4e3c-8e22-82fd51000b0e\scratch\build_verify\backend.staticwebassets.endpoints.json
+C:\Users\damir\.gemini\antigravity\brain\d3990448-6658-4e3c-8e22-82fd51000b0e\scratch\build_verify\backend.exe
+C:\Users\damir\.gemini\antigravity\brain\d3990448-6658-4e3c-8e22-82fd51000b0e\scratch\build_verify\backend.deps.json
+C:\Users\damir\.gemini\antigravity\brain\d3990448-6658-4e3c-8e22-82fd51000b0e\scratch\build_verify\backend.runtimeconfig.json
+C:\Users\damir\.gemini\antigravity\brain\d3990448-6658-4e3c-8e22-82fd51000b0e\scratch\build_verify\backend.dll
+C:\Users\damir\.gemini\antigravity\brain\d3990448-6658-4e3c-8e22-82fd51000b0e\scratch\build_verify\backend.pdb

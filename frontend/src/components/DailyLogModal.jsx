@@ -47,9 +47,10 @@ export default function DailyLogModal({ activity, onClose, onLogSuccess }) {
   };
 
   const handlePercentageChange = (val) => {
+    const normalized = val.replace(',', '.');
     // Enforce two-decimal precision format: regex matches up to 2 decimal places
-    if (val === '' || /^\d*(\.\d{0,2})?$/.test(val)) {
-      setProgressPercentage(val);
+    if (normalized === '' || /^\d*(\.\d{0,2})?$/.test(normalized)) {
+      setProgressPercentage(normalized);
       setErrorMessage('');
     }
   };
@@ -65,9 +66,10 @@ export default function DailyLogModal({ activity, onClose, onLogSuccess }) {
     setErrorMessage('');
     setSuccessMessage('');
 
-    const val = parseFloat(progressPercentage);
-    if (!progressPercentage || isNaN(val) || val <= 0) {
-      setErrorMessage('Daily completed percentage is required and must be greater than 0.00%.');
+    const normalizedPct = String(progressPercentage ?? '').trim().replace(',', '.');
+    const val = parseFloat(normalizedPct);
+    if (!normalizedPct || isNaN(val) || val <= 0) {
+      setErrorMessage('Please enter a valid daily completed percentage greater than 0%.');
       return;
     }
 
@@ -81,13 +83,27 @@ export default function DailyLogModal({ activity, onClose, onLogSuccess }) {
       return;
     }
 
+    const normalizedPages = String(pagesTranslated ?? '').trim().replace(',', '.');
+    const parsedPages = normalizedPages !== '' ? parseFloat(normalizedPages) : null;
+    if (normalizedPages !== '' && (!/^-?\d+(\.\d+)?$/.test(normalizedPages) || isNaN(parsedPages) || parsedPages < 0)) {
+      setErrorMessage('Please enter a valid number of translated pages (>= 0).');
+      return;
+    }
+
+    const normalizedHours = String(hoursSpent ?? '').trim().replace(',', '.');
+    const parsedHours = normalizedHours !== '' ? parseFloat(normalizedHours) : null;
+    if (normalizedHours !== '' && (!/^-?\d+(\.\d+)?$/.test(normalizedHours) || isNaN(parsedHours) || parsedHours < 0)) {
+      setErrorMessage('Please enter a valid amount of hours spent (>= 0).');
+      return;
+    }
+
     setIsSubmitting(true);
     try {
       const token = localStorage.getItem('easyLangToken');
       const payload = {
         progressPercentage: parseFloat(val.toFixed(2)),
-        pagesTranslated: pagesTranslated ? parseFloat(parseFloat(pagesTranslated).toFixed(2)) : null,
-        hoursSpent: hoursSpent ? parseFloat(parseFloat(hoursSpent).toFixed(2)) : null,
+        pagesTranslated: parsedPages !== null ? parseFloat(parsedPages.toFixed(2)) : null,
+        hoursSpent: parsedHours !== null ? parseFloat(parsedHours.toFixed(2)) : null,
         logDate: logDate,
         notes: notes.trim() || null
       };
@@ -110,7 +126,7 @@ export default function DailyLogModal({ activity, onClose, onLogSuccess }) {
         setNotes('');
         fetchHistory();
         if (onLogSuccess) {
-          onLogSuccess(data.cumulativeProgress);
+          onLogSuccess(data.cumulativeProgress, data.remainingHoursEstimate);
         }
         setTimeout(() => {
           setSuccessMessage('');
@@ -140,7 +156,7 @@ export default function DailyLogModal({ activity, onClose, onLogSuccess }) {
         const data = await res.json();
         fetchHistory();
         if (onLogSuccess) {
-          onLogSuccess(data.cumulativeProgress);
+          onLogSuccess(data.cumulativeProgress, data.remainingHoursEstimate);
         }
       }
     } catch (err) {
@@ -221,13 +237,10 @@ export default function DailyLogModal({ activity, onClose, onLogSuccess }) {
 
         {/* Tab 1: New Daily Log Input */}
         {activeTab === 'newLog' && (
-          <form onSubmit={handleSubmit} className="p-5 sm:p-6 space-y-4">
+          <form onSubmit={handleSubmit} noValidate className="p-5 sm:p-6 space-y-4">
             {errorMessage && (
-              <div className="p-3 bg-red-50 border border-red-200 text-red-600 text-xs sm:text-sm rounded-xl flex items-center gap-2">
-                <svg className="w-5 h-5 shrink-0 text-red-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-                </svg>
-                <span>{errorMessage}</span>
+              <div className="p-3 bg-red-50 border border-red-200 text-red-600 text-xs rounded-xl font-medium">
+                {errorMessage}
               </div>
             )}
 
@@ -311,11 +324,13 @@ export default function DailyLogModal({ activity, onClose, onLogSuccess }) {
                   Pages Translated
                 </label>
                 <input
-                  type="number"
-                  step="0.01"
-                  min="0"
+                  type="text"
+                  inputMode="decimal"
                   value={pagesTranslated}
-                  onChange={(e) => setPagesTranslated(e.target.value)}
+                  onChange={(e) => {
+                    setPagesTranslated(e.target.value);
+                    setErrorMessage('');
+                  }}
                   className="w-full px-3 py-2 text-sm border border-slate-200 rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none text-slate-800"
                 />
               </div>
@@ -325,11 +340,13 @@ export default function DailyLogModal({ activity, onClose, onLogSuccess }) {
                   Hours Spent
                 </label>
                 <input
-                  type="number"
-                  step="0.1"
-                  min="0"
+                  type="text"
+                  inputMode="decimal"
                   value={hoursSpent}
-                  onChange={(e) => setHoursSpent(e.target.value)}
+                  onChange={(e) => {
+                    setHoursSpent(e.target.value);
+                    setErrorMessage('');
+                  }}
                   className="w-full px-3 py-2 text-sm border border-slate-200 rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none text-slate-800"
                 />
               </div>
@@ -372,7 +389,7 @@ export default function DailyLogModal({ activity, onClose, onLogSuccess }) {
               </button>
               <button
                 type="submit"
-                disabled={isSubmitting || isOverLimit || inputPercentageNum <= 0}
+                disabled={isSubmitting}
                 className="px-5 py-2.5 text-xs sm:text-sm font-bold bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl shadow-md transition-all disabled:opacity-50 disabled:pointer-events-none flex items-center gap-2"
               >
                 {isSubmitting ? 'Recording...' : 'Submit Daily Record'}
