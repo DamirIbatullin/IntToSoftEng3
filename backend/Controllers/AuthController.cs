@@ -71,6 +71,36 @@ namespace EasyLang.Controllers
             return Ok(new
             {
                 token = tokenHandler.WriteToken(token),
+                role = user.Role,
+                user = new
+                {
+                    id = user.Id,
+                    initials = user.Initials,
+                    role = user.Role
+                }
+            });
+        }
+
+        [Microsoft.AspNetCore.Authorization.Authorize]
+        [HttpGet("me")]
+        public async Task<IActionResult> GetCurrentUser()
+        {
+            var userIdClaim = User.FindFirst(ClaimTypes.NameIdentifier)?.Value;
+            if (string.IsNullOrEmpty(userIdClaim) || !int.TryParse(userIdClaim, out int userId))
+            {
+                return Unauthorized(new { error = "Invalid session token" });
+            }
+
+            var user = await _context.Employees.FindAsync(userId);
+            if (user == null)
+            {
+                return NotFound(new { error = "User not found" });
+            }
+
+            return Ok(new
+            {
+                id = user.Id,
+                initials = user.Initials,
                 role = user.Role
             });
         }

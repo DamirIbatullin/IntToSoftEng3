@@ -24,9 +24,27 @@ namespace EasyLang.Models
 
         [Column("name")]
         [StringLength(100)]
-        public string Name { get; set; }
+        public string Name { get; set; } = string.Empty;
 
         [Column("planned_hours")]
         public decimal PlannedHours { get; set; }
+
+        [Column("status")]
+        [StringLength(50)]
+        public string? Status { get; set; } = "Pending Start";
+
+        [Column("remaining_hours_estimate")]
+        public decimal? RemainingHoursEstimate { get; set; }
+
+        [Column("last_submitted_at")]
+        public DateTime? LastSubmittedAt { get; set; }
+
+        [Column("latest_attachment_name")]
+        [StringLength(255)]
+        public string? LatestAttachmentName { get; set; }
+
+        [Column("latest_attachment_type")]
+        [StringLength(20)]
+        public string? LatestAttachmentType { get; set; }
     }
 }

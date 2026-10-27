@@ -11,5 +11,8 @@ namespace EasyLang.Data
         public DbSet<Employee> Employees { get; set; }
         public DbSet<Project> Projects { get; set; }
         public DbSet<Activity> Activities { get; set; }
+        public DbSet<DailyWorkRecord> DailyWorkRecords { get; set; }
+        public DbSet<WeeklyEstimation> WeeklyEstimations { get; set; }
+        public DbSet<TranslationDefect> TranslationDefects { get; set; }
     }
 }
