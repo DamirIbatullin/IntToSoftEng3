@@ -27,6 +27,8 @@ namespace EasyLang.Controllers
         public int? AttachmentFileSize { get; set; }
         public bool SubmitForReview { get; set; } = true;
         public string? SubmissionDate { get; set; }
+        // New: optional Chief Editor added as an additional reviewer for this submission
+        public int? AdditionalEditorId { get; set; }
     }
 
     public class CreateDefectDto
@@ -337,6 +339,41 @@ namespace EasyLang.Controllers
                 CreatedAt = DateTime.UtcNow
             };
 
+            // New: add an additional Chief Editor to review this submission
+            var project = await _context.Projects.FindAsync(activity.ProjectId);
+            string? addedEditorInitials = null;
+            if (dto.AdditionalEditorId.HasValue && dto.AdditionalEditorId.Value > 0)
+            {
+                var editor = await _context.Employees.FindAsync(dto.AdditionalEditorId.Value);
+                if (editor == null || editor.Role != "Chief Editor")
+                {
+                    return BadRequest(new { error = "Selected editor was not found or is not a Chief Editor." });
+                }
+                if (project == null)
+                {
+                    return NotFound(new { error = "Project not found" });
+                }
+                if (project.ChiefEditorId == editor.Id)
+                {
+                    return BadRequest(new { error = $"{editor.Initials} is already the Lead Chief Editor of this project." });
+                }
+
+                if (project.ChiefEditorId == null)
+                {
+                    // No lead editor yet -> the selected editor becomes the lead
+                    project.ChiefEditorId = editor.Id;
+                }
+                else
+                {
+                    project.SecondaryChiefEditorId = editor.Id;
+                }
+                project.ReassignmentNote = $"Added as reviewer by translator during weekly submission ({DateTime.UtcNow:yyyy-MM-dd}).";
+                project.ReassignedAt = DateTime.UtcNow;
+
+                estimation.ReviewerEditorId = editor.Id;
+                addedEditorInitials = editor.Initials;
+            }
+
             _context.WeeklyEstimations.Add(estimation);
 
             // Update Activity tracking fields and status to 'In Review' if submitted for Friday review
@@ -359,11 +396,37 @@ namespace EasyLang.Controllers
 
             await _context.SaveChangesAsync();
 
+            // Give the added editor review permissions (same table as Story #8)
+            if (estimation.ReviewerEditorId.HasValue && project != null)
+            {
+                string level = project.ChiefEditorId == estimation.ReviewerEditorId ? "Primary" : "Secondary";
+                try
+                {
+                    await _context.Database.ExecuteSqlRawAsync(@"
+                        INSERT INTO ""ProjectEditorAccess"" (project_id, editor_id, access_level, can_review, can_log_defects, can_toggle_status)
+                        VALUES ({0}, {1}, {2}, TRUE, TRUE, TRUE)
+                        ON CONFLICT (project_id, editor_id) DO UPDATE SET access_level = {2}, can_review = TRUE, can_log_defects = TRUE, can_toggle_status = TRUE;
+                    ", project.Id, estimation.ReviewerEditorId.Value, level);
+                }
+                catch (Exception ex)
+                {
+                    Console.WriteLine($"ProjectEditorAccess sync notice: {ex.Message}");
+                }
+            }
+
+            string baseMessage = dto.SubmitForReview
+                ? "Friday weekly estimation & translation submitted for review! Status updated to 'In Review'."
+                : "Weekly remaining work estimation saved to history.";
+
             return Ok(new
             {
-                message = dto.SubmitForReview
-                    ? "Friday weekly estimation & translation submitted for review! Status updated to 'In Review'."
-                    : "Weekly remaining work estimation saved to history.",
+                message = addedEditorInitials != null
+                    ? $"{baseMessage} {addedEditorInitials} was added as a reviewing Chief Editor."
+                    : baseMessage,
+                chiefEditorId = project?.ChiefEditorId,
+                secondaryChiefEditorId = project?.SecondaryChiefEditorId,
+                addedEditorId = estimation.ReviewerEditorId,
+                addedEditorInitials = addedEditorInitials,
                 status = activity.Status,
                 remainingHoursEstimate = activity.RemainingHoursEstimate,
                 lastSubmittedAt = activity.LastSubmittedAt,
@@ -382,6 +445,8 @@ namespace EasyLang.Controllers
                     attachmentFileType = estimation.AttachmentFileType,
                     attachmentFileSize = estimation.AttachmentFileSize,
                     submittedForReview = estimation.SubmittedForReview,
+                    reviewerEditorId = estimation.ReviewerEditorId,
+                    reviewerEditorInitials = addedEditorInitials,
                     submissionDate = estimation.SubmissionDate.ToString("yyyy-MM-dd"),
                     createdAt = estimation.CreatedAt
                 }
@@ -397,10 +462,21 @@ namespace EasyLang.Controllers
                 return NotFound(new { error = "Activity not found" });
             }
 
-            var estimations = await _context.WeeklyEstimations
+            var editorInitialsList = await _context.Employees
+                .Where(e => e.Role == "Chief Editor")
+                .Select(e => new { e.Id, e.Initials })
+                .ToListAsync();
+            var editorInitials = editorInitialsList
+                .GroupBy(e => e.Id)
+                .ToDictionary(g => g.Key, g => g.First().Initials);
+
+            var estimationsRaw = await _context.WeeklyEstimations
                 .Where(w => w.ActivityId == id)
                 .OrderByDescending(w => w.SubmissionDate)
                 .ThenByDescending(w => w.Id)
+                .ToListAsync();
+
+            var estimations = estimationsRaw
                 .Select(w => new
                 {
                     id = w.Id,
@@ -414,10 +490,16 @@ namespace EasyLang.Controllers
                     attachmentFileType = w.AttachmentFileType,
                     attachmentFileSize = w.AttachmentFileSize,
                     submittedForReview = w.SubmittedForReview,
+                    reviewerEditorId = w.ReviewerEditorId,
+                    reviewerEditorInitials = w.ReviewerEditorId.HasValue && editorInitials.TryGetValue(w.ReviewerEditorId.Value, out var revInit)
+                        ? revInit
+                        : null,
                     submissionDate = w.SubmissionDate.ToString("yyyy-MM-dd"),
                     createdAt = w.CreatedAt
                 })
-                .ToListAsync();
+                .ToList();
+
+            var currentProject = await _context.Projects.FindAsync(activity.ProjectId);
 
             return Ok(new
             {
@@ -428,6 +510,8 @@ namespace EasyLang.Controllers
                 lastSubmittedAt = activity.LastSubmittedAt,
                 latestAttachmentName = activity.LatestAttachmentName,
                 latestAttachmentType = activity.LatestAttachmentType,
+                chiefEditorId = currentProject?.ChiefEditorId,
+                secondaryChiefEditorId = currentProject?.SecondaryChiefEditorId,
                 totalCount = estimations.Count,
                 estimations = estimations
             });
