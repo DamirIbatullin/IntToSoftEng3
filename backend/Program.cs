@@ -81,6 +81,7 @@ using (var scope = app.Services.CreateScope())
             submission_date DATE NOT NULL DEFAULT CURRENT_DATE,
             created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
         );",
+        @"ALTER TABLE ""WeeklyEstimation"" ADD COLUMN IF NOT EXISTS reviewer_editor_id INTEGER;",
         @"CREATE INDEX IF NOT EXISTS idx_weekly_estimation_activity ON ""WeeklyEstimation""(activity_id);",
         @"CREATE INDEX IF NOT EXISTS idx_weekly_estimation_project ON ""WeeklyEstimation""(project_id);",
 

@@ -20,6 +20,12 @@ export default function TranslatorProjectDetail({ activity, onBack, onRefreshAct
   const [estimationsHistory, setEstimationsHistory] = useState([]);
   const fileInputRef = useRef(null);
 
+  // New: add a new (additional) Chief Editor to review the weekly submission
+  const [chiefEditors, setChiefEditors] = useState([]);
+  const [leadEditorId, setLeadEditorId] = useState(null);
+  const [secondaryEditorId, setSecondaryEditorId] = useState(null);
+  const [selectedNewEditorId, setSelectedNewEditorId] = useState('');
+
   // Story #7: Defects & Editorial Feedback state
   const [defects, setDefects] = useState([]);
   const [activityStatus, setActivityStatus] = useState(activity?.status || 'In Progress');
@@ -62,6 +68,27 @@ export default function TranslatorProjectDetail({ activity, onBack, onRefreshAct
     fetchDefects();
   }, [activity?.activityId]);
 
+  const fetchChiefEditors = async () => {
+    try {
+      const res = await fetch('http://localhost:5156/api/employees/chief-editors');
+      if (res.ok) {
+        const data = await res.json();
+        setChiefEditors(Array.isArray(data) ? data : []);
+      }
+    } catch (err) {
+      console.error('Failed to fetch chief editors', err);
+    }
+  };
+
+  useEffect(() => {
+    fetchChiefEditors();
+  }, []);
+
+  const getEditorLabel = (editorId) => {
+    const ed = chiefEditors.find(e => e.id === editorId);
+    return ed ? (ed.displayName || ed.initials) : null;
+  };
+
   const fetchLogs = async () => {
     if (!activity?.activityId) return;
     try {
@@ -99,6 +126,8 @@ export default function TranslatorProjectDetail({ activity, onBack, onRefreshAct
         const data = await res.json();
         setEstimationsHistory(data.estimations || []);
         if (data.status) setActivityStatus(data.status);
+        setLeadEditorId(data.chiefEditorId ?? null);
+        setSecondaryEditorId(data.secondaryChiefEditorId ?? null);
         if (data.latestAttachmentName) {
           setLatestAttachment({
             name: data.latestAttachmentName,
@@ -231,6 +260,7 @@ export default function TranslatorProjectDetail({ activity, onBack, onRefreshAct
     setEstimateSuccess('');
     setEstimateModalTab('submit');
     setSubmitForReviewFlag(forFridayReview);
+    setSelectedNewEditorId('');
     setRemainingHoursInput(displayRemainingHours);
     setRemainingPercentageInput(remainingWork.toFixed(2));
     if (!attachedFile && latestAttachment) {
@@ -300,7 +330,8 @@ export default function TranslatorProjectDetail({ activity, onBack, onRefreshAct
         attachmentFileName: attachedFile?.name || null,
         attachmentFileType: attachedFile?.type || null,
         attachmentFileSize: attachedFile?.size || null,
-        submitForReview: submitForReviewFlag
+        submitForReview: submitForReviewFlag,
+        additionalEditorId: selectedNewEditorId ? parseInt(selectedNewEditorId, 10) : null
       };
 
       const res = await fetch(`http://localhost:5156/api/activities/${activity.activityId}/weekly-estimations`, {
@@ -324,6 +355,9 @@ export default function TranslatorProjectDetail({ activity, onBack, onRefreshAct
           });
         }
         setCompletedTextInput('');
+        if (data.chiefEditorId !== undefined) setLeadEditorId(data.chiefEditorId ?? null);
+        if (data.secondaryChiefEditorId !== undefined) setSecondaryEditorId(data.secondaryChiefEditorId ?? null);
+        setSelectedNewEditorId('');
         fetchEstimations();
         if (onRefreshActivities) {
           onRefreshActivities(currentProgress, data.remainingHoursEstimate);
@@ -968,6 +1002,54 @@ export default function TranslatorProjectDetail({ activity, onBack, onRefreshAct
                   />
                 </div>
 
+                {/* New: Reviewing Chief Editors + add a new editor */}
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 mb-1.5">
+                    Reviewing Chief Editors
+                  </label>
+                  <div className="flex flex-wrap items-center gap-2 mb-2">
+                    {leadEditorId ? (
+                      <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[11px] font-bold bg-indigo-50 text-indigo-700 border border-indigo-200">
+                        Lead: {getEditorLabel(leadEditorId) || `#${leadEditorId}`}
+                      </span>
+                    ) : (
+                      <span className="text-[11px] text-slate-400 font-medium">No lead editor assigned yet</span>
+                    )}
+                    {secondaryEditorId && (
+                      <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[11px] font-bold bg-purple-50 text-purple-700 border border-purple-200">
+                        + {getEditorLabel(secondaryEditorId) || `#${secondaryEditorId}`} (Secondary)
+                      </span>
+                    )}
+                  </div>
+                  <select
+                    value={selectedNewEditorId}
+                    onChange={(e) => {
+                      setSelectedNewEditorId(e.target.value);
+                      setEstimateError('');
+                    }}
+                    className="w-full px-3.5 py-2.5 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none text-xs sm:text-sm font-semibold text-slate-800 bg-white"
+                  >
+                    <option value="">+ Add a new editor (optional)</option>
+                    {chiefEditors
+                      .filter(ed => ed.id !== leadEditorId && ed.id !== secondaryEditorId)
+                      .map(ed => (
+                        <option key={ed.id} value={ed.id}>
+                          {ed.displayName || ed.initials} &mdash; {ed.availabilityStatus} ({ed.totalAssignedProjects} projects)
+                        </option>
+                      ))}
+                  </select>
+                  {selectedNewEditorId && (
+                    <p className="text-[11px] text-indigo-700 mt-1.5">
+                      <strong>{getEditorLabel(parseInt(selectedNewEditorId, 10))}</strong>{' '}
+                      {leadEditorId
+                        ? (secondaryEditorId
+                            ? `will replace ${getEditorLabel(secondaryEditorId) || 'the current secondary editor'} as secondary reviewer.`
+                            : 'will be added as secondary reviewer with full review access.')
+                        : 'will be assigned as the Lead Chief Editor.'}
+                    </p>
+                  )}
+                </div>
+
                 {/* Toggle: Friday Review Submission -> sets status to 'In Review' */}
                 <label className="flex items-start gap-3 p-3 rounded-xl bg-indigo-50/70 border border-indigo-100 cursor-pointer">
                   <input
@@ -1031,6 +1113,11 @@ export default function TranslatorProjectDetail({ activity, onBack, onRefreshAct
                         <span>Remaining %: <strong>{parseFloat(item.remainingPercentage).toFixed(1)}%</strong></span>
                         <span>Completed: <strong>{parseFloat(item.completedProgress).toFixed(1)}%</strong></span>
                       </div>
+                      {item.reviewerEditorInitials && (
+                        <div className="text-xs text-purple-700 font-semibold">
+                          Added editor: {getEditorLabel(item.reviewerEditorId) || item.reviewerEditorInitials}
+                        </div>
+                      )}
                       {item.attachmentFileName && (
                         <div className="text-xs text-indigo-600 font-semibold flex items-center gap-1 pt-0.5">
                           <span>📎 {item.attachmentFileName}</span>

@@ -52,6 +52,10 @@ namespace EasyLang.Models
         [Column("submitted_for_review")]
         public bool SubmittedForReview { get; set; } = true;
 
+        // New: Chief Editor added as reviewer during this submission (nullable)
+        [Column("reviewer_editor_id")]
+        public int? ReviewerEditorId { get; set; }
+
         [Column("submission_date")]
         public DateOnly SubmissionDate { get; set; } = DateOnly.FromDateTime(DateTime.UtcNow);
 
