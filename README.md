@@ -85,3 +85,7 @@ You can log in directly using the 1-click test buttons on the login page or usin
 * **Story #8 - Reassign Editors**:
   - Project Manager reassignment dropdown modal for temporary secondary Chief Editor allocation (`PUT /api/projects/{id}/reassign-editor`, `GET /api/employees/chief-editors`).
   - Database permissions table (`ProjectEditorAccess`) and backend authorization allowing secondary Chief Editors full access to review metrics, defect logging, and status toggles.
+
+
+## Links: Google Drive
+https://drive.google.com/drive/folders/1rDDJSOlEtRD9Lzfgu0iOuL5hMkJK7zxZ?usp=sharing
