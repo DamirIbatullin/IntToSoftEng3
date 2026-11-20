@@ -4,6 +4,7 @@ using Microsoft.AspNetCore.Authorization;
 using Microsoft.EntityFrameworkCore;
 using EasyLang.Data;
 using EasyLang.Models;
+using EasyLang.Services;
 using System.Security.Claims;
 
 namespace EasyLang.Controllers
@@ -53,10 +54,12 @@ namespace EasyLang.Controllers
     public class ActivitiesController : ControllerBase
     {
         private readonly AppDbContext _context;
+        private readonly AutomationsService _automationsService;
 
-        public ActivitiesController(AppDbContext context)
+        public ActivitiesController(AppDbContext context, AutomationsService automationsService)
         {
             _context = context;
+            _automationsService = automationsService;
         }
 
         private async Task<bool> HasEditorAccessAsync(int projectId, int userId, string? userRole)
@@ -157,6 +160,22 @@ namespace EasyLang.Controllers
 
             await _context.SaveChangesAsync();
 
+            // Story #10: Auto-dismiss pending missing daily log alerts
+            var pendingAlerts = await _context.AlertNotifications
+                .Where(a => a.ActivityId == id && a.AlertType == "MissingDailyLog" && !a.IsDismissed)
+                .ToListAsync();
+            foreach (var a in pendingAlerts)
+            {
+                a.IsDismissed = true;
+            }
+            if (pendingAlerts.Any())
+            {
+                await _context.SaveChangesAsync();
+            }
+
+            // Story #9 & Story #11: Trigger dynamic workload recalculation and project velocity sync
+            var workload = await _automationsService.RecalculateActivityWorkloadAsync(id);
+
             return Ok(new
             {
                 message = "Daily progress logged successfully.",
@@ -171,10 +190,12 @@ namespace EasyLang.Controllers
                     notes = dailyLog.Notes,
                     createdAt = dailyLog.CreatedAt
                 },
-                cumulativeProgress = newCumulative,
-                remainingPercentage = remainingPercentage,
+                cumulativeProgress = workload.BaseProgressPercentage,
+                effectiveProgress = workload.EffectiveProgressPercentage,
+                correctionSetbackPercentage = workload.CorrectionSetbackPercentage,
+                remainingPercentage = workload.RemainingPercentage,
                 plannedHours = estimatedTotalHours,
-                remainingHoursEstimate = activity.RemainingHoursEstimate,
+                remainingHoursEstimate = workload.RemainingHoursEstimate,
                 status = activity.Status
             });
         }
@@ -303,6 +324,21 @@ namespace EasyLang.Controllers
                 .SumAsync(d => (decimal?)d.ProgressPercentage) ?? 0m;
             currentProgress = Math.Min(100.00m, Math.Round(currentProgress, 2));
 
+            bool hasOpenDefects = await _context.TranslationDefects
+                .AnyAsync(d => d.ActivityId == id && !d.IsResolved);
+            bool isSentBackByEditor = activity.Status == "Revision Requested" || hasOpenDefects;
+
+            if (currentProgress >= 100.00m && !isSentBackByEditor)
+            {
+                if (!dto.SubmitForReview || dto.RemainingHours > 0)
+                {
+                    return BadRequest(new
+                    {
+                        error = "Cannot add estimated remaining work (hours) when activity progress is 100%, unless a Chief Editor logs a mistake and sends the task back to the translator."
+                    });
+                }
+            }
+
             decimal remainingPct = dto.RemainingPercentage.HasValue
                 ? Math.Clamp(Math.Round(dto.RemainingPercentage.Value, 2), 0m, 100m)
                 : Math.Max(0m, 100.00m - currentProgress);
@@ -358,6 +394,21 @@ namespace EasyLang.Controllers
             }
 
             await _context.SaveChangesAsync();
+
+            // Story #10: Auto-dismiss pending missing weekly estimation alerts
+            var pendingEstAlerts = await _context.AlertNotifications
+                .Where(a => a.ActivityId == id && a.AlertType == "MissingWeeklyEstimation" && !a.IsDismissed)
+                .ToListAsync();
+            foreach (var a in pendingEstAlerts)
+            {
+                a.IsDismissed = true;
+            }
+            if (pendingEstAlerts.Any())
+            {
+                await _context.SaveChangesAsync();
+            }
+
+            var workload = await _automationsService.RecalculateActivityWorkloadAsync(id);
 
             return Ok(new
             {
@@ -531,14 +582,35 @@ namespace EasyLang.Controllers
 
             await _context.SaveChangesAsync();
 
+            // Story #9: Automatically recalculate remaining workload based on correction volume
+            var workload = await _automationsService.RecalculateActivityWorkloadAsync(id);
+
+            // Story #10: Send in-app alert notification to translator about the correction setback
+            var project = await _context.Projects.FindAsync(activity.ProjectId);
+            var defectAlert = new AlertNotification
+            {
+                UserId = activity.TranslatorId,
+                ProjectId = activity.ProjectId,
+                ActivityId = activity.Id,
+                AlertType = "RevisionCorrection",
+                Severity = dto.Severity == "Critical" ? "Urgent" : "Warning",
+                Title = $"Correction Setback: {project?.Name ?? "Project"}",
+                Message = $"Editor has assigned a {dto.Severity} correction ({dto.ErrorCategory}). Workload remaining increased by +{workload.CorrectionSetbackPercentage:F1}% ({workload.RemainingHoursEstimate:F1} hrs remaining).",
+                IsDismissed = false,
+                CreatedAt = DateTime.UtcNow
+            };
+            _context.AlertNotifications.Add(defectAlert);
+            await _context.SaveChangesAsync();
+
             var editorInitials = User.FindFirst(ClaimTypes.Name)?.Value ?? "CE";
 
             return Ok(new
             {
                 message = dto.SendBackToTranslator
-                    ? "Defect logged and task sent back to Translator for correction ('Revision Requested')."
-                    : "Defect logged successfully.",
+                    ? $"Defect logged. Workload increased by +{workload.CorrectionSetbackPercentage:F1}% setback and sent back to Translator ('Revision Requested')."
+                    : $"Defect logged. Workload setback recalculated (+{workload.CorrectionSetbackPercentage:F1}%).",
                 status = activity.Status,
+                workload = workload,
                 defect = new
                 {
                     id = defect.Id,
@@ -616,12 +688,28 @@ namespace EasyLang.Controllers
 
             await _context.SaveChangesAsync();
 
+            // Story #10: Auto-dismiss pending missing weekly estimation alerts
+            var pendingEstAlerts = await _context.AlertNotifications
+                .Where(a => a.ActivityId == id && a.AlertType == "MissingWeeklyEstimation" && !a.IsDismissed)
+                .ToListAsync();
+            foreach (var a in pendingEstAlerts)
+            {
+                a.IsDismissed = true;
+            }
+            if (pendingEstAlerts.Any())
+            {
+                await _context.SaveChangesAsync();
+            }
+
+            var workload = await _automationsService.RecalculateActivityWorkloadAsync(id);
+
             return Ok(new
             {
                 message = $"Activity status updated to '{activity.Status}'.",
                 activityId = id,
                 projectId = activity.ProjectId,
-                status = activity.Status
+                status = activity.Status,
+                workload = workload
             });
         }
 
@@ -637,11 +725,15 @@ namespace EasyLang.Controllers
             defect.IsResolved = !defect.IsResolved;
             await _context.SaveChangesAsync();
 
+            // Story #9: Dynamic recalculation upon defect resolution
+            var workload = await _automationsService.RecalculateActivityWorkloadAsync(id);
+
             return Ok(new
             {
-                message = defect.IsResolved ? "Defect marked as resolved." : "Defect reopened.",
+                message = defect.IsResolved ? "Defect marked as resolved. Workload setback reduced." : "Defect reopened.",
                 id = defect.Id,
-                isResolved = defect.IsResolved
+                isResolved = defect.IsResolved,
+                workload = workload
             });
         }
 
@@ -657,7 +749,30 @@ namespace EasyLang.Controllers
             _context.TranslationDefects.Remove(defect);
             await _context.SaveChangesAsync();
 
-            return Ok(new { message = "Defect entry deleted." });
+            var workload = await _automationsService.RecalculateActivityWorkloadAsync(id);
+
+            return Ok(new
+            {
+                message = "Defect entry deleted.",
+                workload = workload
+            });
+        }
+
+        // =========================================================================
+        // STORY #9: Real-Time Workload Recalculation Endpoint
+        // =========================================================================
+        [HttpGet("{id}/workload")]
+        public async Task<IActionResult> GetActivityWorkload(int id)
+        {
+            try
+            {
+                var workload = await _automationsService.RecalculateActivityWorkloadAsync(id);
+                return Ok(workload);
+            }
+            catch (KeyNotFoundException)
+            {
+                return NotFound(new { error = "Activity not found." });
+            }
         }
     }
 }

@@ -34,10 +34,20 @@ export default function TranslatorProjectDetail({ activity, onBack, onRefreshAct
   );
 
   const [currentProgress, setCurrentProgress] = useState(parseFloat(activity?.cumulativeProgress || 0));
+  const [correctionSetback, setCorrectionSetback] = useState(parseFloat(activity?.correctionSetbackPercentage || 0));
+  const [effectiveProgress, setEffectiveProgress] = useState(
+    parseFloat(activity?.effectiveProgress ?? Math.max(0, (activity?.cumulativeProgress || 0) - (activity?.correctionSetbackPercentage || 0)))
+  );
 
   useEffect(() => {
     if (activity?.cumulativeProgress !== undefined) {
       setCurrentProgress(parseFloat(activity.cumulativeProgress || 0));
+    }
+    if (activity?.correctionSetbackPercentage !== undefined) {
+      setCorrectionSetback(parseFloat(activity.correctionSetbackPercentage || 0));
+    }
+    if (activity?.effectiveProgress !== undefined) {
+      setEffectiveProgress(parseFloat(activity.effectiveProgress || 0));
     }
     if (activity?.status) {
       setActivityStatus(activity.status);
@@ -53,14 +63,36 @@ export default function TranslatorProjectDetail({ activity, onBack, onRefreshAct
     }
   }, [activity]);
 
-  const progress = currentProgress;
-  const remainingWork = Math.max(0, 100 - progress);
+  const progress = effectiveProgress;
+  const baseProgress = currentProgress;
+  const remainingWork = Math.min(100, Math.max(0, 100 - progress));
 
   useEffect(() => {
     fetchLogs();
     fetchEstimations();
     fetchDefects();
+    fetchWorkload();
   }, [activity?.activityId]);
+
+  const fetchWorkload = async () => {
+    if (!activity?.activityId) return;
+    try {
+      const token = localStorage.getItem('easyLangToken');
+      const res = await fetch(`http://localhost:5156/api/activities/${activity.activityId}/workload`, {
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setCorrectionSetback(parseFloat(data.correctionSetbackPercentage || 0));
+        setEffectiveProgress(parseFloat(data.effectiveProgressPercentage || 0));
+        if (data.remainingHoursEstimate != null) {
+          setCustomRemainingHours(data.remainingHoursEstimate);
+        }
+      }
+    } catch (err) {
+      console.error('Failed to fetch workload', err);
+    }
+  };
 
   const fetchLogs = async () => {
     if (!activity?.activityId) return;
@@ -142,11 +174,16 @@ export default function TranslatorProjectDetail({ activity, onBack, onRefreshAct
     return Number.isInteger(n) ? n.toString() : n.toFixed(1).replace(/\.0$/, '');
   };
 
+  const isCompleted = progress >= 100;
+  const openDefectsCount = defects.filter(d => !d.isResolved).length;
+  const isSentBackByEditor = activityStatus === 'Revision Requested' || openDefectsCount > 0;
+  const canAddRemainingWork = !isCompleted || isSentBackByEditor;
+
   // Remaining hours automatically scaled proportionally to the Estimated Total and rounded to nearest 0.5h
   const autoRemainingHours = roundToHalfHour(estimatedTotalHours * (remainingWork / 100));
-  const effectiveRemainingHours = customRemainingHours != null
-    ? parseFloat(customRemainingHours)
-    : autoRemainingHours;
+  const effectiveRemainingHours = !canAddRemainingWork
+    ? 0
+    : (customRemainingHours != null ? parseFloat(customRemainingHours) : autoRemainingHours);
   const displayRemainingHours = formatHoursValue(effectiveRemainingHours);
 
   // Estimated total given at the start
@@ -184,8 +221,6 @@ export default function TranslatorProjectDetail({ activity, onBack, onRefreshAct
       dailyPercentages['Sun'] = 0;
     }
   }
-
-  const isCompleted = progress >= 100;
 
   const getStatusBadgeInfo = () => {
     if (activityStatus === 'Revision Requested') {
@@ -231,8 +266,8 @@ export default function TranslatorProjectDetail({ activity, onBack, onRefreshAct
     setEstimateSuccess('');
     setEstimateModalTab('submit');
     setSubmitForReviewFlag(forFridayReview);
-    setRemainingHoursInput(displayRemainingHours);
-    setRemainingPercentageInput(remainingWork.toFixed(2));
+    setRemainingHoursInput(canAddRemainingWork ? displayRemainingHours : '0');
+    setRemainingPercentageInput(canAddRemainingWork ? remainingWork.toFixed(2) : '0.00');
     if (!attachedFile && latestAttachment) {
       setAttachedFile({
         name: latestAttachment.name,
@@ -275,6 +310,11 @@ export default function TranslatorProjectDetail({ activity, onBack, onRefreshAct
     const remHours = parseFloat(normalizedHoursStr);
     if (normalizedHoursStr === '' || !/^-?\d+(\.\d+)?$/.test(normalizedHoursStr) || isNaN(remHours) || remHours < 0) {
       setEstimateError('Please enter a valid remaining work estimate in hours (>= 0).');
+      return;
+    }
+
+    if (!canAddRemainingWork && (!submitForReviewFlag || remHours > 0)) {
+      setEstimateError('Cannot add estimated remaining work (hours) when activity progress is 100%, unless a Chief Editor logs a mistake and sends the task back to the translator.');
       return;
     }
 
@@ -350,15 +390,23 @@ export default function TranslatorProjectDetail({ activity, onBack, onRefreshAct
         headers: { 'Authorization': `Bearer ${token}` }
       });
       if (res.ok) {
+        const data = await res.json();
         fetchDefects();
+        if (data.workload) {
+          setCorrectionSetback(parseFloat(data.workload.correctionSetbackPercentage || 0));
+          setEffectiveProgress(parseFloat(data.workload.effectiveProgressPercentage || 0));
+          if (data.workload.remainingHoursEstimate != null) {
+            setCustomRemainingHours(data.workload.remainingHoursEstimate);
+          }
+        } else {
+          fetchWorkload();
+        }
         if (onRefreshActivities) onRefreshActivities(currentProgress);
       }
     } catch (err) {
       console.error('Could not resolve defect', err);
     }
   };
-
-  const openDefectsCount = defects.filter(d => !d.isResolved).length;
 
   return (
     <div className="w-full space-y-6 animate-in fade-in duration-200">
@@ -545,6 +593,94 @@ export default function TranslatorProjectDetail({ activity, onBack, onRefreshAct
         </div>
       </div>
 
+      {/* Story #9: Dynamic Workload Recalculation & Setback Analysis Bar */}
+      <div className="bg-white rounded-2xl border border-slate-200 p-5 shadow-2xs">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 mb-3">
+          <div>
+            <div className="flex items-center gap-2">
+              <h3 className="text-sm font-extrabold text-slate-900">
+                Dynamic Workload Recalculation &amp; Timeline Setback
+              </h3>
+              <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-indigo-100 text-indigo-700">
+                Story #9
+              </span>
+            </div>
+            <p className="text-xs text-slate-500 mt-0.5">
+              Backend formula automatically recalculates total remaining % and hours based on correction volume.
+            </p>
+          </div>
+
+          {correctionSetback > 0 ? (
+            <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-bold bg-amber-50 text-amber-800 border border-amber-200 self-start sm:self-auto">
+              <span className="w-2 h-2 rounded-full bg-amber-500 animate-pulse" />
+              Setback Active: +{correctionSetback.toFixed(1)}% ({openDefectsCount} defect{openDefectsCount === 1 ? '' : 's'})
+            </span>
+          ) : (
+            <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-bold bg-emerald-50 text-emerald-700 border border-emerald-200 self-start sm:self-auto">
+              <span className="w-2 h-2 rounded-full bg-emerald-500" />
+              Timeline Synchronized (0% Setback)
+            </span>
+          )}
+        </div>
+
+        {/* Dual-Layer Dynamic Progress Bar */}
+        <div className="space-y-1.5 mb-3">
+          <div className="flex items-center justify-between text-xs font-bold">
+            <span className="text-slate-700">
+              Effective Progress: <strong className="text-indigo-600">{effectiveProgress.toFixed(1)}%</strong>
+              {correctionSetback > 0 && (
+                <span className="text-slate-400 font-normal ml-1">
+                  (Base Translated: {baseProgress.toFixed(1)}%)
+                </span>
+              )}
+            </span>
+            <span className="text-slate-700">
+              Total Remaining Workload: <strong className="text-amber-800">{remainingWork.toFixed(1)}% ({displayRemainingHours}h)</strong>
+            </span>
+          </div>
+
+          <div className="w-full bg-slate-100 h-4 rounded-xl overflow-hidden flex shadow-inner">
+            <div
+              className="bg-indigo-600 h-full transition-all duration-300"
+              style={{ width: `${Math.min(100, effectiveProgress)}%` }}
+              title={`Effective Progress: ${effectiveProgress.toFixed(1)}%`}
+            />
+            {correctionSetback > 0 && (
+              <div
+                className="bg-amber-400 h-full opacity-85"
+                style={{
+                  width: `${Math.min(100 - effectiveProgress, correctionSetback)}%`,
+                  backgroundImage: 'repeating-linear-gradient(45deg, transparent, transparent 6px, rgba(0,0,0,0.15) 6px, rgba(0,0,0,0.15) 12px)'
+                }}
+                title={`Correction Setback: ${correctionSetback.toFixed(1)}%`}
+              />
+            )}
+          </div>
+        </div>
+
+        {/* Formula Breakdown Matrix */}
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 pt-2 border-t border-slate-100 text-[11px]">
+          <div className="bg-slate-50 p-2.5 rounded-xl text-center">
+            <span className="text-slate-400 block font-medium">Base Translated</span>
+            <span className="font-extrabold text-slate-800">{baseProgress.toFixed(1)}%</span>
+          </div>
+          <div className="bg-amber-50/70 p-2.5 rounded-xl text-center border border-amber-100">
+            <span className="text-amber-700 block font-medium">Correction Setback</span>
+            <span className="font-extrabold text-amber-800">
+              {correctionSetback > 0 ? `-${correctionSetback.toFixed(1)}%` : '0.0%'}
+            </span>
+          </div>
+          <div className="bg-indigo-50/70 p-2.5 rounded-xl text-center border border-indigo-100">
+            <span className="text-indigo-700 block font-medium">Effective Progress</span>
+            <span className="font-extrabold text-indigo-900">{effectiveProgress.toFixed(1)}%</span>
+          </div>
+          <div className="bg-slate-50 p-2.5 rounded-xl text-center">
+            <span className="text-slate-400 block font-medium">Remaining Workload</span>
+            <span className="font-extrabold text-slate-800">{remainingWork.toFixed(1)}% ({displayRemainingHours}h)</span>
+          </div>
+        </div>
+      </div>
+
       {/* Action Buttons matching Figma + Story #6 Friday Submission */}
       <div className="flex flex-wrap items-center gap-3">
         <button
@@ -558,7 +694,9 @@ export default function TranslatorProjectDetail({ activity, onBack, onRefreshAct
         <button
           type="button"
           onClick={() => handleOpenEstimateModal(false)}
-          className="px-5 py-2.5 bg-indigo-50 hover:bg-indigo-100 text-[#4f46e5] text-xs font-bold rounded-xl transition-colors border border-indigo-100"
+          disabled={!canAddRemainingWork}
+          title={!canAddRemainingWork ? 'Activity is 100% completed. Remaining work can only be added if a Chief Editor logs a mistake and sends it back.' : ''}
+          className="px-5 py-2.5 bg-indigo-50 hover:bg-indigo-100 text-[#4f46e5] text-xs font-bold rounded-xl transition-colors border border-indigo-100 disabled:opacity-50 disabled:cursor-not-allowed"
         >
           Update estimate
         </button>
@@ -818,6 +956,12 @@ export default function TranslatorProjectDetail({ activity, onBack, onRefreshAct
                   </div>
                 )}
 
+                {!canAddRemainingWork && (
+                  <div className="p-3 bg-amber-50 border border-amber-200 text-amber-800 text-xs rounded-xl font-medium">
+                    Activity progress is at <strong>100%</strong>. Estimated remaining work (hours) is locked at <strong>0h</strong> unless a Chief Editor logs a mistake and sends the task back to you.
+                  </div>
+                )}
+
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                   <div>
                     <label className="block text-xs font-bold text-slate-700 mb-1">
@@ -827,33 +971,36 @@ export default function TranslatorProjectDetail({ activity, onBack, onRefreshAct
                       <input
                         type="text"
                         inputMode="decimal"
+                        disabled={!canAddRemainingWork}
                         value={remainingHoursInput}
                         onChange={(e) => {
                           setRemainingHoursInput(e.target.value);
                           setEstimateError('');
                         }}
                         placeholder="e.g., 12.5"
-                        className="w-full px-3.5 py-2.5 pr-10 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none text-sm font-bold text-slate-900"
+                        className="w-full px-3.5 py-2.5 pr-10 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none text-sm font-bold text-slate-900 disabled:bg-slate-100 disabled:text-slate-400 disabled:cursor-not-allowed"
                       />
                       <span className="absolute right-3.5 top-1/2 -translate-y-1/2 text-xs font-bold text-slate-400">
                         hrs
                       </span>
                     </div>
-                    <div className="flex flex-wrap gap-1 mt-1.5">
-                      {[4, 8, 12, 16, 24].map(h => (
-                        <button
-                          key={h}
-                          type="button"
-                          onClick={() => {
-                            setRemainingHoursInput(h.toString());
-                            setEstimateError('');
-                          }}
-                          className="px-2 py-0.5 text-[11px] font-semibold bg-slate-100 hover:bg-indigo-50 hover:text-indigo-600 text-slate-600 rounded-md transition-colors"
-                        >
-                          {h}h
-                        </button>
-                      ))}
-                    </div>
+                    {canAddRemainingWork && (
+                      <div className="flex flex-wrap gap-1 mt-1.5">
+                        {[4, 8, 12, 16, 24].map(h => (
+                          <button
+                            key={h}
+                            type="button"
+                            onClick={() => {
+                              setRemainingHoursInput(h.toString());
+                              setEstimateError('');
+                            }}
+                            className="px-2 py-0.5 text-[11px] font-semibold bg-slate-100 hover:bg-indigo-50 hover:text-indigo-600 text-slate-600 rounded-md transition-colors"
+                          >
+                            {h}h
+                          </button>
+                        ))}
+                      </div>
+                    )}
                   </div>
 
                   <div>
@@ -864,6 +1011,7 @@ export default function TranslatorProjectDetail({ activity, onBack, onRefreshAct
                       <input
                         type="text"
                         inputMode="decimal"
+                        disabled={!canAddRemainingWork}
                         value={remainingPercentageInput}
                         onChange={(e) => {
                           const val = e.target.value;
@@ -874,7 +1022,7 @@ export default function TranslatorProjectDetail({ activity, onBack, onRefreshAct
                             setRemainingHoursInput(formatHoursValue(roundToHalfHour(estimatedTotalHours * (numPct / 100))));
                           }
                         }}
-                        className="w-full px-3.5 py-2.5 pr-8 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none text-sm font-bold text-slate-900"
+                        className="w-full px-3.5 py-2.5 pr-8 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none text-sm font-bold text-slate-900 disabled:bg-slate-100 disabled:text-slate-400 disabled:cursor-not-allowed"
                       />
                       <span className="absolute right-3.5 top-1/2 -translate-y-1/2 text-xs font-bold text-slate-400">
                         %

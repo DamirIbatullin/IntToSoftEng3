@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import DailyLogModal from './DailyLogModal';
 import TranslatorProjectDetail from './TranslatorProjectDetail';
+import NotificationBell from './NotificationBell';
 
 export default function TranslatorDashboard({ userProfile, onLogout }) {
   const [activities, setActivities] = useState([]);
@@ -78,10 +79,53 @@ export default function TranslatorDashboard({ userProfile, onLogout }) {
     }, 250);
   };
 
+  const matchesActivitySearch = (act, rawQuery) => {
+    if (!rawQuery || !rawQuery.trim()) return true;
+    let q = rawQuery.trim().toLowerCase();
+    if (q.startsWith('id ')) q = q.slice(3).trim();
+    q = q.replace(/^#/, '');
+    if (!q) return true;
+
+    const pNum = String(act.projectNumber ?? '').toLowerCase();
+    const aNum = String(act.activityNumber ?? '1').toLowerCase();
+    const aNumPadded = aNum.length === 1 ? `0${aNum}` : aNum;
+    const actId = String(act.activityId ?? '').toLowerCase();
+    const combinedId = `${pNum}-${aNum}`;
+    const combinedIdPadded = `${pNum}-${aNumPadded}`;
+    const pName = String(act.projectName ?? '').toLowerCase();
+    const aName = String(act.activityName ?? '').toLowerCase();
+
+    // If query is numeric or ID format (e.g., "101", "101-1", "101-01")
+    if (/^[\d-]+$/.test(q)) {
+      return (
+        pNum === q ||
+        actId === q ||
+        combinedId === q ||
+        combinedIdPadded === q ||
+        pNum.includes(q) ||
+        combinedId.startsWith(q) ||
+        combinedIdPadded.startsWith(q)
+      );
+    }
+
+    // Direct substring match on Project Name, Activity Name, or ID
+    if (pName.includes(q) || aName.includes(q) || combinedId.includes(q) || pNum.includes(q)) {
+      return true;
+    }
+
+    // Multi-word token check: every word in the search query must appear in projectName, activityName, or ID
+    const tokens = q.split(/[\s\-_]+/).filter(Boolean);
+    const searchableText = `${pNum} ${combinedId} ${combinedIdPadded} ${pName} ${aName}`;
+    return tokens.length > 0 && tokens.every(token => searchableText.includes(token));
+  };
+
+  const filteredActivities = activities.filter(act => matchesActivitySearch(act, searchQuery));
+
   // Featured activity prioritizes Revision Requested or In-Progress activities
   const featuredActivity =
-    activities.find(a => a.status === 'Revision Requested') ||
-    activities.find(a => parseFloat(a.cumulativeProgress || 0) < 100 && a.status !== 'In Review') ||
+    filteredActivities.find(a => a.status === 'Revision Requested') ||
+    filteredActivities.find(a => parseFloat(a.cumulativeProgress || 0) < 100 && a.status !== 'In Review') ||
+    filteredActivities[0] ||
     activities[0];
 
   const handleQuickAddWork = async (e) => {
@@ -253,7 +297,7 @@ export default function TranslatorDashboard({ userProfile, onLogout }) {
           />
         ) : (
           <>
-            {/* Header matching Figma */}
+            {/* Header matching Figma + Sprint 4 Automated Notifications */}
             <header className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-4 mb-6">
               <div>
                 <h1 className="text-2xl sm:text-[28px] font-extrabold text-[#111827] tracking-tight">
@@ -264,13 +308,58 @@ export default function TranslatorDashboard({ userProfile, onLogout }) {
                 </p>
               </div>
 
-              <div className="inline-flex items-center gap-2 px-3.5 py-1.5 rounded-full text-xs font-semibold bg-indigo-50/80 text-indigo-700 border border-indigo-200/80 shadow-2xs">
-                <svg className="w-4 h-4 text-indigo-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9" />
-                </svg>
-                <span>Weekly status report due by Friday, 18:00</span>
+              <div className="flex items-center gap-3 self-start sm:self-auto">
+                <div className="inline-flex items-center gap-2 px-3.5 py-1.5 rounded-full text-xs font-semibold bg-indigo-50/80 text-indigo-700 border border-indigo-200/80 shadow-2xs">
+                  <svg className="w-4 h-4 text-indigo-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9" />
+                  </svg>
+                  <span>Weekly status report due by Friday, 18:00</span>
+                </div>
+
+                {/* Story #10 Automated Notification Bell */}
+                <NotificationBell
+                  allowedProjectIds={Array.from(new Set(activities.map(a => a.projectId).filter(Boolean)))}
+                  onOpenDailyLog={(actId) => {
+                    const matched = activities.find(a => a.activityId === actId || a.activityId === parseInt(actId, 10));
+                    if (matched) handleOpenProjectDetail(matched);
+                  }}
+                  onOpenProjectDetail={(actId) => {
+                    const matched = activities.find(a => a.activityId === actId || a.activityId === parseInt(actId, 10));
+                    if (matched) handleOpenProjectDetail(matched);
+                  }}
+                  onRefreshData={() => fetchActivities(searchQuery)}
+                />
               </div>
             </header>
+
+            {/* Story #10: Automated Missing Daily Progress Alert Banner */}
+            {activities.filter(a => a.isMissingTodayLog && a.status !== 'Completed' && a.status !== 'Approved').length > 0 && (
+              <div className="mb-6 p-4 rounded-2xl bg-amber-50/90 border-2 border-amber-300 shadow-2xs flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                <div className="flex items-center gap-3">
+                  <span className="w-9 h-9 rounded-xl bg-amber-200 text-amber-900 flex items-center justify-center font-bold text-base shrink-0 shadow-2xs">
+                    ⚠️
+                  </span>
+                  <div>
+                    <h3 className="text-xs sm:text-sm font-extrabold text-amber-900">
+                      Automated Alert: Daily Progress Entry Missing ({activities.filter(a => a.isMissingTodayLog && a.status !== 'Completed' && a.status !== 'Approved').length} active {activities.filter(a => a.isMissingTodayLog && a.status !== 'Completed' && a.status !== 'Approved').length === 1 ? 'task' : 'tasks'})
+                    </h3>
+                    <p className="text-[11px] text-amber-800">
+                      You haven't recorded today's work yet. Logging progress daily keeps automated project health and delivery forecasts accurate.
+                    </p>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => {
+                    const firstMissing = activities.find(a => a.isMissingTodayLog && a.status !== 'Completed' && a.status !== 'Approved');
+                    if (firstMissing) handleOpenProjectDetail(firstMissing);
+                  }}
+                  className="px-3.5 py-2 rounded-xl bg-amber-600 hover:bg-amber-700 text-white font-bold text-xs shadow-xs transition-colors shrink-0 cursor-pointer self-start sm:self-auto"
+                >
+                  View &amp; Log Daily Progress &rarr;
+                </button>
+              </div>
+            )}
 
             {/* Live Search Bar (Story #4) */}
             <div className="mb-6">
@@ -331,20 +420,49 @@ export default function TranslatorDashboard({ userProfile, onLogout }) {
                         </div>
                       )}
 
-                      {/* Progress Bar */}
+                      {/* Dynamic Progress & Setback Bar (Story #9) */}
                       <div className="mb-4">
                         <div className="flex justify-between items-center text-xs font-semibold text-slate-600 mb-1.5">
-                          <span>Progress</span>
+                          <div className="flex items-center gap-1.5">
+                            <span>Progress</span>
+                            {parseFloat(featuredActivity.correctionSetbackPercentage || 0) > 0 && (
+                              <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-100 text-amber-800 border border-amber-200">
+                                +{parseFloat(featuredActivity.correctionSetbackPercentage).toFixed(1)}% Correction Setback
+                              </span>
+                            )}
+                          </div>
                           <span className="font-bold text-slate-900">
-                            {parseFloat(featuredActivity.cumulativeProgress || 0).toFixed(2)}%
+                            {parseFloat(featuredActivity.effectiveProgress || featuredActivity.cumulativeProgress || 0).toFixed(2)}%
+                            {parseFloat(featuredActivity.correctionSetbackPercentage || 0) > 0 && (
+                              <span className="text-slate-400 font-normal text-[11px] ml-1">
+                                (Base: {parseFloat(featuredActivity.cumulativeProgress || 0).toFixed(1)}%)
+                              </span>
+                            )}
                           </span>
                         </div>
-                        <div className="w-full bg-slate-100 h-2.5 rounded-full overflow-hidden">
+                        <div className="w-full bg-slate-100 h-3 rounded-full overflow-hidden flex">
                           <div 
                             className="bg-indigo-600 h-full transition-all duration-300"
-                            style={{ width: `${Math.min(100, parseFloat(featuredActivity.cumulativeProgress || 0))}%` }}
+                            style={{ width: `${Math.min(100, parseFloat(featuredActivity.effectiveProgress || featuredActivity.cumulativeProgress || 0))}%` }}
+                            title={`Effective Progress: ${(featuredActivity.effectiveProgress || featuredActivity.cumulativeProgress || 0)}%`}
                           />
+                          {parseFloat(featuredActivity.correctionSetbackPercentage || 0) > 0 && (
+                            <div
+                              className="bg-amber-400 h-full opacity-80"
+                              style={{
+                                width: `${Math.min(100 - (featuredActivity.effectiveProgress || 0), parseFloat(featuredActivity.correctionSetbackPercentage))}%`,
+                                backgroundImage: 'repeating-linear-gradient(45deg, transparent, transparent 5px, rgba(0,0,0,0.15) 5px, rgba(0,0,0,0.15) 10px)'
+                              }}
+                              title={`Correction Setback: ${featuredActivity.correctionSetbackPercentage}%`}
+                            />
+                          )}
                         </div>
+                        {parseFloat(featuredActivity.correctionSetbackPercentage || 0) > 0 && (
+                          <div className="flex justify-between items-center text-[10px] text-amber-700 font-medium mt-1">
+                            <span>⚠️ Rework required: Remaining hours increased to {featuredActivity.remainingHoursEstimate}h</span>
+                            <span>Remaining: {parseFloat(featuredActivity.remainingPercentage || (100 - (featuredActivity.effectiveProgress || 0))).toFixed(1)}%</span>
+                          </div>
+                        )}
                       </div>
 
                       {/* Quick Inline Log: Today's Work */}
@@ -483,7 +601,7 @@ export default function TranslatorDashboard({ userProfile, onLogout }) {
               <div className="px-5 py-4 border-b border-slate-100 flex items-center justify-between">
                 <h2 className="text-base font-bold text-slate-900">My Projects</h2>
                 <span className="text-xs font-semibold text-slate-400">
-                  {activities.length} total projects
+                  {filteredActivities.length} total projects
                 </span>
               </div>
 
@@ -492,7 +610,7 @@ export default function TranslatorDashboard({ userProfile, onLogout }) {
                   <div className="w-6 h-6 border-2 border-indigo-600 border-t-transparent rounded-full animate-spin mx-auto mb-2" />
                   Loading assigned projects...
                 </div>
-              ) : activities.length === 0 ? (
+              ) : filteredActivities.length === 0 ? (
                 <div className="py-12 text-center text-slate-400 text-sm">
                   {searchQuery ? `No projects found matching "${searchQuery}"` : 'No translation projects currently assigned to your account.'}
                 </div>
@@ -508,47 +626,79 @@ export default function TranslatorDashboard({ userProfile, onLogout }) {
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-slate-100">
-                      {activities.map((act) => {
-                        const progress = parseFloat(act.cumulativeProgress || 0);
-                        const isCompleted = progress >= 100;
+                      {filteredActivities.map((act) => {
+                        const baseProgress = parseFloat(act.cumulativeProgress || 0);
+                        const setback = parseFloat(act.correctionSetbackPercentage || 0);
+                        const effectiveProgress = parseFloat(act.effectiveProgress ?? Math.max(0, baseProgress - setback));
+                        const isCompleted = effectiveProgress >= 100 && setback === 0;
                         const plannedTotal = parseFloat(act.plannedHours) > 0 ? parseFloat(act.plannedHours) : 28;
-                        const rawRem = plannedTotal * Math.max(0, (100 - progress) / 100);
-                        const roundedRem = Math.round(rawRem * 2) / 2;
-                        const remainingHrs = Number.isInteger(roundedRem) ? roundedRem.toString() : roundedRem.toFixed(1);
+                        const remainingHrs = act.remainingHoursEstimate != null ? act.remainingHoursEstimate : Math.round(plannedTotal * (Math.max(0, 100 - effectiveProgress) / 100) * 2) / 2;
                         const { label: statusLabel, color: statusColor } = getActivityStatusPresentation(act);
 
                         return (
                           <tr key={act.activityId} className="hover:bg-slate-50/60 transition-colors">
                             <td className="py-4 px-5">
-                              <p className="text-sm font-bold text-slate-900">{act.projectName}</p>
+                              <div className="flex items-center gap-2">
+                                <p className="text-sm font-bold text-slate-900">{act.projectName}</p>
+                                {act.isMissingTodayLog && (
+                                  <span className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-amber-100 text-amber-800 border border-amber-200" title="Missing progress log today">
+                                    ⚠️ Missing Today
+                                  </span>
+                                )}
+                              </div>
                               <p className="text-xs text-slate-400 font-medium mt-0.5">
                                 ID {act.projectNumber}-{act.activityNumber} {act.activityName && `• ${act.activityName}`} &bull; <span className="text-slate-600 font-semibold">{remainingHrs}h remaining of {plannedTotal}h</span>
                               </p>
-                              {act.openDefectsCount > 0 && (
-                                <p className="text-[11px] text-red-600 font-bold mt-1">
-                                  ⚠ {act.openDefectsCount} editorial {act.openDefectsCount === 1 ? 'defect' : 'defects'} logged
+                              {setback > 0 && (
+                                <p className="text-[11px] text-amber-700 font-bold mt-1">
+                                  ⚠️ +{setback.toFixed(1)}% setback ({act.openDefectsCount || 1} defect(s))
                                 </p>
                               )}
                             </td>
 
                             <td className="py-4 px-5">
                               <div className="space-y-1">
-                                <span className="text-xs font-bold text-slate-800">
-                                  {progress.toFixed(2)}%
-                                </span>
-                                <div className="w-full bg-slate-100 h-2 rounded-full overflow-hidden">
+                                <div className="flex items-center justify-between text-xs font-bold text-slate-800">
+                                  <span>{effectiveProgress.toFixed(1)}%</span>
+                                  {setback > 0 && (
+                                    <span className="text-[10px] text-amber-700 font-semibold">
+                                      +{setback.toFixed(0)}% rework
+                                    </span>
+                                  )}
+                                </div>
+                                <div className="w-full bg-slate-100 h-2.5 rounded-full overflow-hidden flex">
                                   <div 
                                     className={`h-full ${isCompleted ? 'bg-emerald-500' : 'bg-indigo-600'}`}
-                                    style={{ width: `${Math.min(100, progress)}%` }}
+                                    style={{ width: `${Math.min(100, effectiveProgress)}%` }}
+                                    title={`Effective: ${effectiveProgress}%`}
                                   />
+                                  {setback > 0 && (
+                                    <div
+                                      className="bg-amber-400 h-full opacity-80"
+                                      style={{
+                                        width: `${Math.min(100 - effectiveProgress, setback)}%`,
+                                        backgroundImage: 'repeating-linear-gradient(45deg, transparent, transparent 3px, rgba(0,0,0,0.15) 3px, rgba(0,0,0,0.15) 6px)'
+                                      }}
+                                      title={`Correction setback: ${setback}%`}
+                                    />
+                                  )}
                                 </div>
                               </div>
                             </td>
 
                             <td className="py-4 px-5 whitespace-nowrap">
-                              <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-semibold border whitespace-nowrap ${statusColor}`}>
-                                {statusLabel}
-                              </span>
+                              <div className="flex flex-col items-start gap-1">
+                                <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-semibold border whitespace-nowrap ${statusColor}`}>
+                                  {statusLabel}
+                                </span>
+                                {act.healthStatus && act.healthStatus !== 'On Track' && (
+                                  <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${
+                                    act.healthStatus === 'Delayed' ? 'bg-red-100 text-red-700' : 'bg-amber-100 text-amber-800'
+                                  }`}>
+                                    SLA: {act.healthStatus}
+                                  </span>
+                                )}
+                              </div>
                             </td>
 
                             <td className="py-4 px-5 text-right whitespace-nowrap">
@@ -557,7 +707,7 @@ export default function TranslatorDashboard({ userProfile, onLogout }) {
                                 onClick={() => handleOpenProjectDetail(act)}
                                 className="px-3.5 py-1.5 text-xs font-bold rounded-lg transition-colors border border-indigo-200 text-indigo-600 hover:bg-indigo-50 whitespace-nowrap cursor-pointer"
                               >
-                                Add work
+                                View &amp; Log &rarr;
                               </button>
                             </td>
                           </tr>

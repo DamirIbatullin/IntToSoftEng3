@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import NotificationBell from './NotificationBell';
 
 export default function ChiefEditorDashboard({ userProfile, onLogout }) {
   const [projects, setProjects] = useState([]);
@@ -499,21 +500,26 @@ export default function ChiefEditorDashboard({ userProfile, onLogout }) {
             )}
           </div>
 
-          <button
-            type="button"
-            onClick={() => {
-              setAssistantProjectId(projects[0]?.projectId?.toString() || '');
-              const freeEditor = chiefEditors.find(e => e.id !== userProfile?.id) || chiefEditors[0];
-              setSelectedSecondaryEditorId(freeEditor ? freeEditor.id.toString() : '');
-              setIsAssistantModalOpen(true);
-            }}
-            className="px-4 py-2 border border-indigo-200 text-indigo-600 hover:bg-indigo-50 font-bold text-xs rounded-xl transition-colors flex items-center gap-2 self-start sm:self-auto shadow-2xs bg-white cursor-pointer"
-          >
-            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M18 9v3m0 0v3m0-3h3m-3 0h-3m-2-5a4 4 0 11-8 0 4 4 0 018 0zM3 20a6 6 0 0112 0v1H3v-1z" />
-            </svg>
-            Request Assistant Editor
-          </button>
+          <div className="flex items-center gap-3 self-start sm:self-auto">
+            {/* Story #10 Automated Notification Bell */}
+            <NotificationBell onRefreshData={fetchProjects} />
+
+            <button
+              type="button"
+              onClick={() => {
+                setAssistantProjectId(projects[0]?.projectId?.toString() || '');
+                const freeEditor = chiefEditors.find(e => e.id !== userProfile?.id) || chiefEditors[0];
+                setSelectedSecondaryEditorId(freeEditor ? freeEditor.id.toString() : '');
+                setIsAssistantModalOpen(true);
+              }}
+              className="px-4 py-2 border border-indigo-200 text-indigo-600 hover:bg-indigo-50 font-bold text-xs rounded-xl transition-colors flex items-center gap-2 shadow-2xs bg-white cursor-pointer"
+            >
+              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M18 9v3m0 0v3m0-3h3m-3 0h-3m-2-5a4 4 0 11-8 0 4 4 0 018 0zM3 20a6 6 0 0112 0v1H3v-1z" />
+              </svg>
+              Request Assistant Editor
+            </button>
+          </div>
         </header>
 
         {/* Filter Pills and Search Bar */}
@@ -948,6 +954,16 @@ export default function ChiefEditorDashboard({ userProfile, onLogout }) {
                       placeholder="Describe the mistake found in the translation and specify what the translator must revise..."
                       className="w-full px-3.5 py-2 text-xs sm:text-sm border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none text-slate-800 resize-none"
                     />
+                  </div>
+
+                  {/* Story #9: Dynamic Setback Preview */}
+                  <div className="p-3 bg-amber-50/80 rounded-xl border border-amber-200 text-xs text-amber-900 space-y-1">
+                    <div className="flex items-center gap-1.5 font-bold">
+                      <span>⚡ Sprint 4 Automatic Workload Recalculation:</span>
+                    </div>
+                    <p className="text-[11px] text-amber-800">
+                      Assigning this <strong>{severity}</strong> defect will automatically apply a <strong>+{severity === 'Critical' ? '20.0%' : severity === 'Major' ? '10.0%' : '5.0%'}</strong> setback to the translator's workload, reducing effective progress and increasing remaining hours.
+                    </p>
                   </div>
 
                   <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pt-1">

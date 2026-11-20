@@ -59,6 +59,26 @@ namespace EasyLang.Controllers
                 dueDateUtc = DateTime.SpecifyKind(dto.DueDate.Value.Date, DateTimeKind.Utc);
             }
 
+            decimal defaultPlannedHours = dto.ComplexityLevel switch
+            {
+                "Low" => 14.0m,
+                "High" => 42.0m,
+                _ => 28.0m
+            };
+            decimal effectivePlannedHours = (dto.EstimatedHours.HasValue && dto.EstimatedHours.Value > 0)
+                ? dto.EstimatedHours.Value
+                : defaultPlannedHours;
+
+            decimal defaultReviewHours = dto.ComplexityLevel switch
+            {
+                "Low" => 4.0m,
+                "High" => 12.0m,
+                _ => 7.0m
+            };
+            decimal effectiveReviewHours = (dto.ReviewHours.HasValue && dto.ReviewHours.Value > 0)
+                ? dto.ReviewHours.Value
+                : defaultReviewHours;
+
             var project = new Project
             {
                 ProjectNumber = dto.ProjectNumber,
@@ -67,7 +87,7 @@ namespace EasyLang.Controllers
                 ChiefEditorId = dto.LeadChiefEditorId,
                 SecondaryChiefEditorId = dto.BackupChiefEditorId,
                 ComplexityLevel = dto.ComplexityLevel,
-                ReviewHours = dto.ReviewHours,
+                ReviewHours = effectiveReviewHours,
                 CreatedAt = DateTime.UtcNow,
                 DueDate = dueDateUtc
             };
@@ -87,8 +107,9 @@ namespace EasyLang.Controllers
                 TranslatorId = dto.PrimaryTranslatorId,
                 ActivityNumber = 1,
                 Name = activityName,
-                PlannedHours = dto.EstimatedHours ?? 0,
-                Status = "Pending Start"
+                PlannedHours = effectivePlannedHours,
+                Status = "Pending Start",
+                RemainingHoursEstimate = effectivePlannedHours
             };
             
             _context.Activities.Add(activity);
@@ -234,12 +255,64 @@ namespace EasyLang.Controllers
                 defectsSummary.TryGetValue(p.Id, out var defSum);
                 latestEstimations.TryGetValue(p.Id, out var latestEst);
 
-                decimal plannedTotal = (act != null && act.PlannedHours > 0) ? act.PlannedHours : 28.0m;
+                decimal defaultComplexityHours = p.ComplexityLevel switch
+                {
+                    "Low" => 14.0m,
+                    "High" => 42.0m,
+                    _ => 28.0m
+                };
+                decimal plannedTotal = (act != null && act.PlannedHours > 0)
+                    ? act.PlannedHours
+                    : (p.ReviewHours.HasValue && p.ReviewHours.Value > 0 ? p.ReviewHours.Value : defaultComplexityHours);
                 decimal autoRemaining = Math.Round(plannedTotal * (Math.Max(0m, 100.00m - cumulativeProgress) / 100.00m) * 2.0m, MidpointRounding.AwayFromZero) / 2.0m;
-                decimal? remainingHoursEst = act?.RemainingHoursEstimate ?? latestEst?.RemainingHours ?? autoRemaining;
+                bool isSentBack = status == "Revision Requested" || (defSum?.OpenDefects ?? 0) > 0;
+                decimal? remainingHoursEst = (cumulativeProgress >= 100.00m && !isSentBack)
+                    ? 0m
+                    : (act?.RemainingHoursEstimate ?? latestEst?.RemainingHours ?? autoRemaining);
                 string? attachmentName = act?.LatestAttachmentName ?? latestEst?.AttachmentFileName;
                 string? attachmentType = act?.LatestAttachmentType ?? latestEst?.AttachmentFileType;
                 DateTime? lastSubmitted = act?.LastSubmittedAt ?? latestEst?.CreatedAt;
+
+                decimal setback = act?.CorrectionSetbackPercentage ?? 0m;
+                if (status == "Revision Requested" && setback == 0 && (defSum?.OpenDefects ?? 0) > 0)
+                {
+                    setback = Math.Min(cumulativeProgress, Math.Max(15.00m, (defSum?.OpenDefects ?? 0) * 10.00m));
+                }
+                decimal effectiveProg = act?.EffectiveProgress ?? Math.Max(0m, cumulativeProgress - setback);
+                decimal remainingPct = Math.Min(100m, Math.Max(0m, 100m - effectiveProg));
+
+                string health = p.HealthStatus ?? "On Track";
+                DateTime? effectiveDueDate = p.DueDate?.Date ?? p.CreatedAt?.Date;
+                int delayDays = 0;
+                bool isOverdue = false;
+                if (effectiveDueDate.HasValue && DateTime.UtcNow.Date > effectiveDueDate.Value && effectiveProg < 100m && status != "Completed" && status != "Approved")
+                {
+                    delayDays = Math.Max(1, (int)(DateTime.UtcNow.Date - effectiveDueDate.Value).TotalDays);
+                    isOverdue = true;
+                }
+
+                if (isOverdue)
+                {
+                    health = "Delayed";
+                }
+                else if (status == "Revision Requested" && setback > 0 && health != "Delayed")
+                {
+                    health = "At Risk";
+                }
+
+                int finalDelayDays = delayDays > 0 ? delayDays : (p.ProjectedDelayDays ?? 0);
+
+                string? slaWarning = null;
+                if (health == "Delayed")
+                {
+                    slaWarning = $"Overdue by {finalDelayDays} day{(finalDelayDays > 1 ? "s" : "")}";
+                }
+                else if (health == "At Risk")
+                {
+                    slaWarning = finalDelayDays > 0
+                        ? $"Behind schedule by ~{finalDelayDays} day{(finalDelayDays > 1 ? "s" : "")}"
+                        : (setback > 0 ? $"Correction setback (+{setback:F1}% rework)" : "Velocity below target");
+                }
 
                 return new
                 {
@@ -260,15 +333,23 @@ namespace EasyLang.Controllers
                     plannedHours = plannedTotal,
                     remainingHoursEstimate = remainingHoursEst,
                     progress = cumulativeProgress,
+                    effectiveProgress = effectiveProg,
+                    correctionSetbackPercentage = setback,
+                    remainingPercentage = remainingPct,
                     logsCount = logsCount,
                     status = status,
+                    healthStatus = health,
+                    calculatedVelocity = p.CalculatedVelocity ?? 0m,
+                    requiredVelocity = p.RequiredVelocity ?? 0m,
+                    projectedDelayDays = finalDelayDays,
+                    slaWarning = slaWarning,
                     attachmentName = attachmentName,
                     attachmentType = attachmentType,
                     lastSubmittedAt = lastSubmitted.HasValue ? lastSubmitted.Value.ToString("yyyy-MM-dd") : null,
                     defectsCount = defSum?.TotalDefects ?? 0,
                     openDefectsCount = defSum?.OpenDefects ?? 0,
                     createdAt = p.CreatedAt.HasValue ? p.CreatedAt.Value.ToString("yyyy-MM-dd") : null,
-                    dueDate = p.DueDate.HasValue ? p.DueDate.Value.ToString("yyyy-MM-dd") : null
+                    dueDate = effectiveDueDate.HasValue ? effectiveDueDate.Value.ToString("yyyy-MM-dd") : null
                 };
             }).ToList();
 
@@ -520,7 +601,11 @@ namespace EasyLang.Controllers
                                         remainingHoursEstimate = a.RemainingHoursEstimate,
                                         lastSubmittedAt = a.LastSubmittedAt,
                                         latestAttachmentName = a.LatestAttachmentName,
-                                        latestAttachmentType = a.LatestAttachmentType
+                                        latestAttachmentType = a.LatestAttachmentType,
+                                        correctionSetbackPercentage = a.CorrectionSetbackPercentage,
+                                        effectiveProgress = a.EffectiveProgress,
+                                        dueDate = p.DueDate,
+                                        healthStatus = p.HealthStatus
                                     }).ToListAsync();
 
             var activityIds = rawActivities.Select(a => a.activityId).ToList();
@@ -593,9 +678,22 @@ namespace EasyLang.Controllers
                     resolvedStatus = "Work entry missing";
                 }
 
+                decimal setback = a.correctionSetbackPercentage ?? 0m;
+                if (resolvedStatus == "Revision Requested" && setback == 0 && (defectInfo?.OpenDefects ?? 0) > 0)
+                {
+                    setback = Math.Min(progress, Math.Max(15.00m, (defectInfo?.OpenDefects ?? 0) * 10.00m));
+                }
+                decimal effectiveProg = a.effectiveProgress ?? Math.Max(0.00m, progress - setback);
+                decimal remainingPct = Math.Min(100.00m, Math.Max(0.00m, 100.00m - effectiveProg));
+
                 decimal plannedTotal = a.plannedHours > 0 ? a.plannedHours : 28.0m;
-                decimal autoRemaining = Math.Round(plannedTotal * (Math.Max(0m, 100.00m - progress) / 100.00m) * 2.0m, MidpointRounding.AwayFromZero) / 2.0m;
-                decimal resolvedRemainingHours = a.remainingHoursEstimate ?? autoRemaining;
+                decimal autoRemaining = Math.Round(plannedTotal * (remainingPct / 100.00m) * 2.0m, MidpointRounding.AwayFromZero) / 2.0m;
+                bool isSentBack = resolvedStatus == "Revision Requested" || (defectInfo?.OpenDefects ?? 0) > 0;
+                decimal resolvedRemainingHours = (effectiveProg >= 100.00m && !isSentBack)
+                    ? 0m
+                    : (a.remainingHoursEstimate ?? autoRemaining);
+
+                bool isMissingToday = latestDate != DateTime.UtcNow.ToString("yyyy-MM-dd") && resolvedStatus != "Completed" && resolvedStatus != "Approved";
 
                 return new
                 {
@@ -616,6 +714,12 @@ namespace EasyLang.Controllers
                     openDefectsCount = defectInfo?.OpenDefects ?? 0,
                     latestDefectComment = defectInfo?.LatestComment,
                     cumulativeProgress = progress,
+                    effectiveProgress = effectiveProg,
+                    correctionSetbackPercentage = setback,
+                    remainingPercentage = remainingPct,
+                    dueDate = a.dueDate.HasValue ? a.dueDate.Value.ToString("yyyy-MM-dd") : null,
+                    healthStatus = a.healthStatus ?? "On Track",
+                    isMissingTodayLog = isMissingToday,
                     latestLogDate = latestDate,
                     logsCount = logsCount
                 };
@@ -626,15 +730,28 @@ namespace EasyLang.Controllers
                 return Ok(enrichedActivities);
             }
 
-            // Fuzzy matching algorithm for activity queries
-            string query = search.Trim().ToLowerInvariant().TrimStart('#');
+            // Accurate ID and Name search for Translator activities
+            string query = search.Trim().ToLowerInvariant();
+            if (query.StartsWith("id "))
+            {
+                query = query.Substring(3).Trim();
+            }
+            query = query.TrimStart('#');
+
             var matched = enrichedActivities
                 .Select(a =>
                 {
-                    double score = CalculateFuzzyScore(a.projectNumber.ToString(), a.projectName, a.activityName, query);
+                    double score = CalculateSearchScore(
+                        a.projectNumber.ToString(),
+                        a.activityNumber.ToString(),
+                        a.activityId.ToString(),
+                        a.projectName,
+                        a.activityName,
+                        query
+                    );
                     return new { Activity = a, Score = score };
                 })
-                .Where(x => x.Score > 0.25)
+                .Where(x => x.Score > 0.0)
                 .OrderByDescending(x => x.Score)
                 .Select(x => x.Activity)
                 .ToList();
@@ -642,59 +759,100 @@ namespace EasyLang.Controllers
             return Ok(matched);
         }
 
-        private static double CalculateFuzzyScore(string projectNumber, string projectName, string activityName, string query)
+        private static double CalculateSearchScore(
+            string projectNumber,
+            string activityNumber,
+            string activityId,
+            string projectName,
+            string activityName,
+            string query)
         {
             if (string.IsNullOrWhiteSpace(query)) return 1.0;
 
-            string pNum = projectNumber.ToLowerInvariant();
+            string pNum = (projectNumber ?? "").ToLowerInvariant();
+            string aNum = (activityNumber ?? "1").ToLowerInvariant();
+            string aNumPadded = aNum.Length == 1 ? $"0{aNum}" : aNum;
+            string actId = (activityId ?? "").ToLowerInvariant();
+            string combinedId = $"{pNum}-{aNum}";
+            string combinedIdPadded = $"{pNum}-{aNumPadded}";
             string pName = (projectName ?? "").ToLowerInvariant();
             string aName = (activityName ?? "").ToLowerInvariant();
 
-            // Direct exact match
-            if (pNum == query || pName == query || aName == query)
+            // 1. Exact ID or name match
+            if (pNum == query || actId == query || combinedId == query || combinedIdPadded == query || pName == query || aName == query)
                 return 1.0;
 
-            // Project number prefix or substring
-            if (pNum.Contains(query))
+            // 2. If the query looks like an ID or number (digits, optionally with a hyphen like "101-1")
+            bool isIdQuery = query.All(c => char.IsDigit(c) || c == '-');
+            if (isIdQuery)
+            {
+                if (combinedId.StartsWith(query) || combinedIdPadded.StartsWith(query) || pNum.StartsWith(query))
+                    return 0.95;
+
+                if (pNum.Contains(query) || combinedId.Contains(query) || actId == query)
+                    return 0.90;
+
+                // Do not fuzzy-match pure numbers against other numbers (prevents "101" matching "102")
+                return 0.0;
+            }
+
+            // 3. Direct substring match on Project Name, Activity Name, or Combined ID
+            if (pName.StartsWith(query) || aName.StartsWith(query))
                 return 0.95;
 
-            // Direct contains match
-            if (pName.Contains(query) || aName.Contains(query))
-                return 0.85;
+            if (pName.Contains(query) || aName.Contains(query) || combinedId.Contains(query))
+                return 0.90;
 
-            // Multi-token match: all words in query appear in target
+            // 4. Multi-word token matching: every word in the search query must match a word in projectName, activityName, or ID
             var queryTokens = query.Split(new[] { ' ', '-', '_' }, StringSplitOptions.RemoveEmptyEntries);
-            if (queryTokens.Length > 1)
+            var targetWords = $"{pNum} {combinedId} {pName} {aName}"
+                .Split(new[] { ' ', '-', '_', '.', ',', '(', ')', '/' }, StringSplitOptions.RemoveEmptyEntries);
+
+            bool allTokensMatched = true;
+            double totalTokenScore = 0.0;
+
+            foreach (var token in queryTokens)
             {
-                bool allTokensInProject = queryTokens.All(t => pName.Contains(t) || pNum.Contains(t));
-                if (allTokensInProject) return 0.80;
-            }
-
-            // Fuzzy Levenshtein similarity on words
-            var allWords = $"{pNum} {pName} {aName}".Split(new[] { ' ', '-', '_', '.', ',' }, StringSplitOptions.RemoveEmptyEntries);
-            double bestTokenScore = 0.0;
-
-            foreach (var word in allWords)
-            {
-                if (word.StartsWith(query))
+                double bestWordMatch = 0.0;
+                foreach (var word in targetWords)
                 {
-                    bestTokenScore = Math.Max(bestTokenScore, 0.75);
-                    continue;
-                }
-
-                int dist = ComputeLevenshteinDistance(word, query);
-                int maxLen = Math.Max(word.Length, query.Length);
-                if (maxLen > 0)
-                {
-                    double sim = 1.0 - ((double)dist / maxLen);
-                    if (sim > bestTokenScore)
+                    if (word == token)
                     {
-                        bestTokenScore = sim;
+                        bestWordMatch = Math.Max(bestWordMatch, 0.95);
+                    }
+                    else if (word.StartsWith(token))
+                    {
+                        bestWordMatch = Math.Max(bestWordMatch, 0.88);
+                    }
+                    else if (word.Contains(token))
+                    {
+                        bestWordMatch = Math.Max(bestWordMatch, 0.80);
+                    }
+                    else if (!token.All(char.IsDigit) && token.Length >= 5 && word.Length >= 5 && word[0] == token[0])
+                    {
+                        // Allow at most a 1-character typo on longer words (>= 5 chars) starting with the same letter
+                        int dist = ComputeLevenshteinDistance(word, token);
+                        if (dist <= 1)
+                        {
+                            bestWordMatch = Math.Max(bestWordMatch, 0.70);
+                        }
                     }
                 }
+
+                if (bestWordMatch == 0.0)
+                {
+                    allTokensMatched = false;
+                    break;
+                }
+                totalTokenScore += bestWordMatch;
             }
 
-            return bestTokenScore;
+            if (allTokensMatched && queryTokens.Length > 0)
+            {
+                return totalTokenScore / queryTokens.Length;
+            }
+
+            return 0.0;
         }
 
         private static int ComputeLevenshteinDistance(string s1, string s2)
