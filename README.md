@@ -86,6 +86,18 @@ You can log in directly using the 1-click test buttons on the login page or usin
   - Project Manager reassignment dropdown modal for temporary secondary Chief Editor allocation (`PUT /api/projects/{id}/reassign-editor`, `GET /api/employees/chief-editors`).
   - Database permissions table (`ProjectEditorAccess`) and backend authorization allowing secondary Chief Editors full access to review metrics, defect logging, and status toggles.
 
+---
 
-## Links: Google Drive
-https://drive.google.com/drive/folders/1rDDJSOlEtRD9Lzfgu0iOuL5hMkJK7zxZ?usp=sharing
+## 📦 Sprint 4 (Iteration 4): Automations & Data Sync
+* **Story #9 - Dynamic Remaining Workload Recalculation**:
+  - Automatic backend formula recalculating Total Remaining % and remaining hours based on defect severity and correction volume (Critical: +20%, Major: +10%, Minor: +5%, with minimum 15% rejection setback).
+  - Dual-layer dynamic progress bars rendering effective progress, base translated progress, and striped correction setback regions across the Translator workspace, project detail view, and Watchlist.
+  - Reactive recalculation endpoints (`GET /api/activities/{id}/workload`, `POST /api/activities/{id}/defects`, `PATCH /api/activities/{id}/defects/{defectId}/resolve`, `PUT /api/activities/{id}/review-status`).
+* **Story #10 - Missing Entry Automations**:
+  - Background automation worker (`BackgroundAutomationWorker`) running periodic and end-of-day checks to identify active translators missing daily progress logs or Friday weekly estimations.
+  - Interactive in-app `NotificationBell` component with real-time unread badge counters, category filtering, and 1-click action triggers ("Log Work Now", "Submit Estimation").
+  - Persistent alert notifications in PostgreSQL `AlertNotification` table (`/api/automations/alerts`, `/api/automations/trigger-missing-log-check`) with auto-dismissal when logs or estimations are submitted.
+* **Story #11 - Automated Project Status**:
+  - Background velocity calculation service (`AutomationsService`) comparing translator daily progress rate against remaining calendar days to project target `DueDate`.
+  - Dynamic SLA risk status flags (`🟢 On Track`, `🟡 At Risk`, `🔴 Delayed`) and delay warning pills on the Project Manager Watchlist.
+  - Automated project health KPI cards and quick filter tabs on the Manager Watchlist for instant tracking of bottlenecks and overdue milestones.

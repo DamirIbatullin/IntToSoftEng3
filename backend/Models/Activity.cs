@@ -46,5 +46,11 @@ namespace EasyLang.Models
         [Column("latest_attachment_type")]
         [StringLength(20)]
         public string? LatestAttachmentType { get; set; }
+
+        [Column("correction_setback_percentage")]
+        public decimal? CorrectionSetbackPercentage { get; set; } = 0;
+
+        [Column("effective_progress")]
+        public decimal? EffectiveProgress { get; set; } = 0;
     }
 }

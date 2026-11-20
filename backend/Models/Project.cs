@@ -48,5 +48,21 @@ namespace EasyLang.Models
 
         [Column("due_date")]
         public DateTime? DueDate { get; set; }
+
+        [Column("health_status")]
+        [StringLength(30)]
+        public string? HealthStatus { get; set; } = "On Track";
+
+        [Column("calculated_velocity")]
+        public decimal? CalculatedVelocity { get; set; } = 0;
+
+        [Column("required_velocity")]
+        public decimal? RequiredVelocity { get; set; } = 0;
+
+        [Column("projected_delay_days")]
+        public int? ProjectedDelayDays { get; set; } = 0;
+
+        [Column("last_status_sync_at")]
+        public DateTime? LastStatusSyncAt { get; set; }
     }
 }

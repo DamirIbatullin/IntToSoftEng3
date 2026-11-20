@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import NotificationBell from './NotificationBell';
 
 export default function Dashboard({ userProfile, onLogout }) {
   const [projects, setProjects] = useState([]);
@@ -10,6 +11,8 @@ export default function Dashboard({ userProfile, onLogout }) {
   const [statusFilter, setStatusFilter] = useState('All');
   const [currentPage, setCurrentPage] = useState(1);
   const [isAttentionExpanded, setIsAttentionExpanded] = useState(false);
+  const [isTriggeringAutomations, setIsTriggeringAutomations] = useState(false);
+  const [automationToast, setAutomationToast] = useState('');
   const pageSize = 5;
 
   // Story #8: Reassign Editors Modal state
@@ -76,7 +79,22 @@ export default function Dashboard({ userProfile, onLogout }) {
 
   const handleInputChange = (e) => {
     const { name, value } = e.target;
-    setFormData(prev => ({ ...prev, [name]: value }));
+    if (name === 'complexityLevel') {
+      const defaultEstimates = {
+        Low: { est: '14', rev: '4' },
+        Medium: { est: '28', rev: '7' },
+        High: { est: '42', rev: '12' }
+      };
+      const defaults = defaultEstimates[value];
+      setFormData(prev => ({
+        ...prev,
+        complexityLevel: value,
+        estimatedHours: (!prev.estimatedHours || prev.estimatedHours === '14' || prev.estimatedHours === '28' || prev.estimatedHours === '42') && defaults ? defaults.est : prev.estimatedHours,
+        reviewHours: (!prev.reviewHours || prev.reviewHours === '4' || prev.reviewHours === '7' || prev.reviewHours === '12') && defaults ? defaults.rev : prev.reviewHours
+      }));
+    } else {
+      setFormData(prev => ({ ...prev, [name]: value }));
+    }
     if (errors[name]) {
       setErrors(prev => ({ ...prev, [name]: '' }));
     }
@@ -115,6 +133,15 @@ export default function Dashboard({ userProfile, onLogout }) {
     setErrors({});
     
     const randomProjectNumber = Math.floor(Math.random() * 90000) + 10000;
+
+    const defaultHours = {
+      Low: { est: 14, rev: 4 },
+      Medium: { est: 28, rev: 7 },
+      High: { est: 42, rev: 12 }
+    }[formData.complexityLevel] || { est: 28, rev: 7 };
+
+    const estimatedHours = formData.estimatedHours ? parseFloat(formData.estimatedHours) : defaultHours.est;
+    const reviewHours = formData.reviewHours ? parseFloat(formData.reviewHours) : defaultHours.rev;
     
     const payload = {
       projectNumber: randomProjectNumber,
@@ -124,8 +151,8 @@ export default function Dashboard({ userProfile, onLogout }) {
       backupChiefEditorId: formData.backupChiefEditorId ? parseInt(formData.backupChiefEditorId) : null,
       complexityLevel: formData.complexityLevel,
       dueDate: formData.dueDate,
-      estimatedHours: formData.estimatedHours ? parseFloat(formData.estimatedHours) : null,
-      reviewHours: formData.reviewHours ? parseFloat(formData.reviewHours) : null
+      estimatedHours: estimatedHours,
+      reviewHours: reviewHours
     };
 
     try {
@@ -231,8 +258,53 @@ export default function Dashboard({ userProfile, onLogout }) {
     }
   };
 
+  // Story #10 & Story #11: Manual Automation Trigger
+  const handleRunAutomations = async () => {
+    try {
+      setIsTriggeringAutomations(true);
+      const token = localStorage.getItem('easyLangToken');
+      const [resLogs, resSync] = await Promise.all([
+        fetch('http://localhost:5156/api/automations/trigger-missing-log-check', {
+          method: 'POST',
+          headers: { 'Authorization': `Bearer ${token}` }
+        }),
+        fetch('http://localhost:5156/api/automations/sync-project-statuses', {
+          method: 'POST',
+          headers: { 'Authorization': `Bearer ${token}` }
+        })
+      ]);
+
+      const logsData = await resLogs.json();
+      const syncData = await resSync.json();
+
+      setAutomationToast(
+        `Automations executed: ${logsData.alertsCreated ?? 0} missing log alert(s) generated & ${syncData.projectsSynced ?? 0} project velocity health statuses synchronized!`
+      );
+      await fetchProjects();
+      setTimeout(() => setAutomationToast(''), 6000);
+    } catch (err) {
+      console.error('Failed to trigger automations', err);
+      setAutomationToast('Failed to connect to automation background service.');
+      setTimeout(() => setAutomationToast(''), 5000);
+    } finally {
+      setIsTriggeringAutomations(false);
+    }
+  };
+
+  const onTrackCount = projects.filter(p => (p.healthStatus === 'On Track' || !p.healthStatus) && p.status !== 'Delayed').length;
+  const atRiskCount = projects.filter(p => p.healthStatus === 'At Risk').length;
+  const delayedCount = projects.filter(p => p.healthStatus === 'Delayed').length;
+  const missingLogsCount = projects.filter(p => p.logsCount === 0 || p.status === 'Work entry missing').length;
+
   const filteredProjects = projects.filter(p => {
-    const matchesStatus = statusFilter === 'All' || p.status === statusFilter;
+    let matchesStatus = true;
+    if (statusFilter === 'All') matchesStatus = true;
+    else if (statusFilter === 'On Track') matchesStatus = p.healthStatus === 'On Track';
+    else if (statusFilter === 'At Risk') matchesStatus = p.healthStatus === 'At Risk';
+    else if (statusFilter === 'Delayed') matchesStatus = p.healthStatus === 'Delayed';
+    else if (statusFilter === 'Missing Logs') matchesStatus = p.logsCount === 0 || p.status === 'Work entry missing';
+    else matchesStatus = p.status === statusFilter;
+
     if (!matchesStatus) return false;
 
     if (!searchQuery.trim()) return true;
@@ -247,7 +319,7 @@ export default function Dashboard({ userProfile, onLogout }) {
   });
 
   const attentionProjects = projects.filter(
-    p => p.complexity === 'High' || p.status === 'In Review' || p.status === 'Revision Requested'
+    p => p.complexity === 'High' || p.status === 'In Review' || p.status === 'Revision Requested' || p.healthStatus === 'Delayed' || p.healthStatus === 'At Risk'
   );
 
   const totalProjects = filteredProjects.length;
@@ -256,52 +328,124 @@ export default function Dashboard({ userProfile, onLogout }) {
   const endIndex = Math.min(startIndex + pageSize, totalProjects);
   const currentProjects = filteredProjects.slice(startIndex, endIndex);
 
-  const renderProjectStatusBadge = (project) => {
-    if (project.status === 'In Review') {
+  const renderUnifiedStatusBadge = (project) => {
+    const health = project.healthStatus || 'On Track';
+    const editorialStatus = project.status || 'Pending Start';
+    const setback = parseFloat(project.correctionSetbackPercentage || 0);
+
+    // 1. Overdue / Delayed projects (Target due date passed and not 100% complete)
+    if (health === 'Delayed') {
       return (
-        <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-semibold bg-purple-50 text-purple-700 border border-purple-200 whitespace-nowrap">
-          <span className="w-1.5 h-1.5 rounded-full bg-purple-500 shrink-0" />
-          In Review
-        </span>
+        <div className="flex flex-col items-start gap-0.5">
+          <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-bold bg-red-100 text-red-800 border border-red-300 whitespace-nowrap">
+            <span className="w-1.5 h-1.5 rounded-full bg-red-600 animate-pulse" />
+            Delayed
+          </span>
+          <span className="text-[10px] font-bold text-red-600 whitespace-nowrap">
+            {project.slaWarning || `Overdue by ${project.projectedDelayDays || 1} days`}
+          </span>
+        </div>
       );
     }
-    if (project.status === 'Revision Requested') {
+
+    // 2. Revision Requested / Correction Setback
+    if (editorialStatus === 'Revision Requested') {
       return (
-        <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-semibold bg-red-50 text-red-700 border border-red-200 whitespace-nowrap">
-          <span className="w-1.5 h-1.5 rounded-full bg-red-500 shrink-0" />
-          Revision Requested
-        </span>
+        <div className="flex flex-col items-start gap-0.5">
+          <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-bold bg-rose-100 text-rose-800 border border-rose-300 whitespace-nowrap">
+            <span className="w-1.5 h-1.5 rounded-full bg-rose-600" />
+            Revision Requested
+          </span>
+          {setback > 0 ? (
+            <span className="text-[10px] font-bold text-amber-700 whitespace-nowrap">
+              +{setback.toFixed(0)}% rework setback
+            </span>
+          ) : (
+            <span className="text-[10px] text-slate-500 font-medium whitespace-nowrap">
+              Awaiting translator fixes
+            </span>
+          )}
+        </div>
       );
     }
-    if (project.status === 'Approved') {
+
+    // 3. At Risk (due to velocity below target or deadline approaching)
+    if (health === 'At Risk') {
       return (
-        <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200 whitespace-nowrap">
-          <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 shrink-0" />
-          Approved
-        </span>
+        <div className="flex flex-col items-start gap-0.5">
+          <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-bold bg-amber-100 text-amber-800 border border-amber-300 whitespace-nowrap">
+            <span className="w-1.5 h-1.5 rounded-full bg-amber-500" />
+            At Risk
+          </span>
+          <span className="text-[10px] font-bold text-amber-700 whitespace-nowrap">
+            {project.slaWarning || 'Pace behind schedule'}
+          </span>
+        </div>
       );
     }
-    if (project.status === 'On Track') {
+
+    // 4. In Review (Friday editorial review)
+    if (editorialStatus === 'In Review') {
       return (
-        <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200 whitespace-nowrap">
-          <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 shrink-0" />
+        <div className="flex flex-col items-start gap-0.5">
+          <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-semibold bg-purple-100 text-purple-800 border border-purple-300 whitespace-nowrap">
+            <span className="w-1.5 h-1.5 rounded-full bg-purple-600" />
+            In Review
+          </span>
+          <span className="text-[10px] text-purple-700 font-medium whitespace-nowrap">
+            Under review by Editor
+          </span>
+        </div>
+      );
+    }
+
+    // 5. Approved / Completed
+    if (editorialStatus === 'Approved' || editorialStatus === 'Completed') {
+      return (
+        <div className="flex flex-col items-start gap-0.5">
+          <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-semibold bg-emerald-100 text-emerald-800 border border-emerald-300 whitespace-nowrap">
+            <span className="w-1.5 h-1.5 rounded-full bg-emerald-600" />
+            {editorialStatus}
+          </span>
+          <span className="text-[10px] text-emerald-700 font-medium whitespace-nowrap">
+            100% completed
+          </span>
+        </div>
+      );
+    }
+
+    // 6. Pending Start
+    if (editorialStatus === 'Pending Start' || project.progress === 0) {
+      return (
+        <div className="flex flex-col items-start gap-0.5">
+          <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-semibold bg-slate-100 text-slate-600 border border-slate-200 whitespace-nowrap">
+            <span className="w-1.5 h-1.5 rounded-full bg-slate-400" />
+            Pending Start
+          </span>
+          <span className="text-[10px] text-slate-400 font-medium whitespace-nowrap">
+            Awaiting first entry
+          </span>
+        </div>
+      );
+    }
+
+    // 7. On Track
+    return (
+      <div className="flex flex-col items-start gap-0.5">
+        <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-bold bg-emerald-50 text-emerald-700 border border-emerald-200 whitespace-nowrap">
+          <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
           On Track
         </span>
-      );
-    }
-    if (project.status === 'Completed') {
-      return (
-        <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-semibold bg-blue-50 text-blue-700 border border-blue-200 whitespace-nowrap">
-          <span className="w-1.5 h-1.5 rounded-full bg-blue-500 shrink-0" />
-          Completed
-        </span>
-      );
-    }
-    return (
-      <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-semibold bg-slate-100 text-slate-600 border border-slate-200 whitespace-nowrap">
-        <span className="w-1.5 h-1.5 rounded-full bg-slate-400 shrink-0" />
-        Pending Start
-      </span>
+        {project.calculatedVelocity > 0 ? (
+          <span className="text-[10px] text-slate-400 font-medium whitespace-nowrap">
+            Vel: {project.calculatedVelocity}%/d
+          </span>
+        ) : (
+          <span className="text-[10px] text-emerald-600 font-medium whitespace-nowrap">
+            Pace on schedule
+          </span>
+        )}
+      </div>
     );
   };
 
@@ -340,15 +484,164 @@ export default function Dashboard({ userProfile, onLogout }) {
       {/* Main Content */}
       <div className="flex-1 w-full overflow-x-hidden p-4 sm:p-6 md:p-8 max-w-7xl">
         
-        {/* Header matching Figma Image 4 */}
-        <header className="mb-6">
-          <h1 className="text-2xl sm:text-[28px] font-extrabold text-[#111827] tracking-tight">
-            Project Manager Portal
-          </h1>
-          <p className="text-xs sm:text-sm text-slate-500 mt-1">
-            Action items first, then watchlist, Friday review estimates, and Chief Editor capacity overview.
-          </p>
+        {/* Header matching Figma Image 4 + Sprint 4 Automations & Bell */}
+        <header className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 mb-6">
+          <div>
+            <h1 className="text-2xl sm:text-[28px] font-extrabold text-[#111827] tracking-tight">
+              Project Manager Portal
+            </h1>
+            <p className="text-xs sm:text-sm text-slate-500 mt-1">
+              Automated status synchronization, velocity calculations, and editorial watchlist.
+            </p>
+          </div>
+
+          <div className="flex items-center gap-3 self-start sm:self-auto">
+            {/* Story #10 Automated Notification Bell */}
+            <NotificationBell onRefreshData={fetchProjects} />
+
+            {/* Story #10 & #11 Manual Trigger Button */}
+            <button
+              type="button"
+              onClick={handleRunAutomations}
+              disabled={isTriggeringAutomations}
+              className="px-3.5 py-2 rounded-xl bg-indigo-50 hover:bg-indigo-100 border border-indigo-200 text-indigo-700 font-bold text-xs flex items-center gap-2 shadow-2xs transition-colors cursor-pointer"
+              title="Run end-of-day missing log check and recalculate velocity health for all projects"
+            >
+              <span className={isTriggeringAutomations ? 'animate-spin' : ''}>⚡</span>
+              <span>{isTriggeringAutomations ? 'Running Automations...' : 'Run Automations'}</span>
+            </button>
+          </div>
         </header>
+
+        {/* Automation Execution Toast */}
+        {automationToast && (
+          <div className="mb-6 p-4 rounded-2xl bg-indigo-50 border border-indigo-200 text-indigo-900 text-xs font-semibold flex items-center justify-between shadow-2xs animate-in fade-in">
+            <div className="flex items-center gap-2.5">
+              <span className="text-base">⚡</span>
+              <span>{automationToast}</span>
+            </div>
+            <button
+              type="button"
+              onClick={() => setAutomationToast('')}
+              className="text-indigo-400 hover:text-indigo-700 font-bold text-sm px-2 cursor-pointer"
+            >
+              ✕
+            </button>
+          </div>
+        )}
+
+        {/* Story #11 & Story #10: Automated Health & Compliance KPI Cards */}
+        <div className="grid grid-cols-2 sm:grid-cols-5 gap-3 mb-6">
+          <button
+            type="button"
+            onClick={() => { setStatusFilter('All'); setCurrentPage(1); }}
+            className={`p-4 rounded-2xl border text-left transition-all cursor-pointer ${
+              statusFilter === 'All'
+                ? 'bg-indigo-600 text-white border-indigo-600 shadow-xs'
+                : 'bg-white border-slate-200 hover:bg-slate-50 text-slate-800'
+            }`}
+          >
+            <span className={`text-[11px] font-bold block uppercase tracking-wider ${
+              statusFilter === 'All' ? 'text-indigo-100' : 'text-slate-400'
+            }`}>
+              Total Projects
+            </span>
+            <span className="text-2xl font-black mt-1 block">{projects.length}</span>
+            <span className={`text-[10px] mt-0.5 block ${
+              statusFilter === 'All' ? 'text-indigo-200' : 'text-slate-400'
+            }`}>
+              All open workloads
+            </span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => { setStatusFilter('On Track'); setCurrentPage(1); }}
+            className={`p-4 rounded-2xl border text-left transition-all cursor-pointer ${
+              statusFilter === 'On Track'
+                ? 'bg-emerald-600 text-white border-emerald-600 shadow-xs'
+                : 'bg-white border-slate-200 hover:bg-slate-50 text-slate-800'
+            }`}
+          >
+            <span className={`text-[11px] font-bold block uppercase tracking-wider ${
+              statusFilter === 'On Track' ? 'text-emerald-100' : 'text-emerald-600'
+            }`}>
+              🟢 On Track
+            </span>
+            <span className="text-2xl font-black mt-1 block">{onTrackCount}</span>
+            <span className={`text-[10px] mt-0.5 block ${
+              statusFilter === 'On Track' ? 'text-emerald-200' : 'text-slate-400'
+            }`}>
+              Meeting delivery pace
+            </span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => { setStatusFilter('At Risk'); setCurrentPage(1); }}
+            className={`p-4 rounded-2xl border text-left transition-all cursor-pointer ${
+              statusFilter === 'At Risk'
+                ? 'bg-amber-500 text-white border-amber-500 shadow-xs'
+                : 'bg-white border-slate-200 hover:bg-slate-50 text-slate-800'
+            }`}
+          >
+            <span className={`text-[11px] font-bold block uppercase tracking-wider ${
+              statusFilter === 'At Risk' ? 'text-amber-100' : 'text-amber-600'
+            }`}>
+              🟡 At Risk
+            </span>
+            <span className="text-2xl font-black mt-1 block">{atRiskCount}</span>
+            <span className={`text-[10px] mt-0.5 block ${
+              statusFilter === 'At Risk' ? 'text-amber-200' : 'text-slate-400'
+            }`}>
+              Velocity below required
+            </span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => { setStatusFilter('Delayed'); setCurrentPage(1); }}
+            className={`p-4 rounded-2xl border text-left transition-all cursor-pointer ${
+              statusFilter === 'Delayed'
+                ? 'bg-red-600 text-white border-red-600 shadow-xs'
+                : 'bg-white border-slate-200 hover:bg-slate-50 text-slate-800'
+            }`}
+          >
+            <span className={`text-[11px] font-bold block uppercase tracking-wider ${
+              statusFilter === 'Delayed' ? 'text-red-100' : 'text-red-600'
+            }`}>
+              🔴 Delayed
+            </span>
+            <span className="text-2xl font-black mt-1 block">{delayedCount}</span>
+            <span className={`text-[10px] mt-0.5 block ${
+              statusFilter === 'Delayed' ? 'text-red-200' : 'text-slate-400'
+            }`}>
+              Overdue deadlines
+            </span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => { setStatusFilter('Missing Logs'); setCurrentPage(1); }}
+            className={`p-4 rounded-2xl border text-left transition-all cursor-pointer ${
+              statusFilter === 'Missing Logs'
+                ? 'bg-orange-600 text-white border-orange-600 shadow-xs'
+                : 'bg-white border-slate-200 hover:bg-slate-50 text-slate-800'
+            }`}
+          >
+            <span className={`text-[11px] font-bold block uppercase tracking-wider ${
+              statusFilter === 'Missing Logs' ? 'text-orange-100' : 'text-orange-600'
+            }`}>
+              ⚠️ Missing Logs
+            </span>
+            <span className="text-2xl font-black mt-1 block">{missingLogsCount}</span>
+            <span className={`text-[10px] mt-0.5 block ${
+              statusFilter === 'Missing Logs' ? 'text-orange-200' : 'text-slate-400'
+            }`}>
+              No daily logs recorded
+            </span>
+          </button>
+        </div>
 
         {/* Needs Attention Card (Interactive for Bottleneck / Editor Reassignment) */}
         <div className="bg-white rounded-2xl border border-slate-200 p-4 sm:p-5 mb-6 shadow-2xs">
@@ -441,10 +734,13 @@ export default function Dashboard({ userProfile, onLogout }) {
                   setStatusFilter(e.target.value);
                   setCurrentPage(1);
                 }}
-                className="border border-slate-200 rounded-xl px-3 py-1.5 text-xs text-slate-600 bg-white outline-none"
+                className="border border-slate-200 rounded-xl px-3 py-1.5 text-xs text-slate-600 bg-white outline-none font-semibold"
               >
-                <option value="All">Status: All</option>
-                <option value="On Track">On Track</option>
+                <option value="All">Filter: All ({projects.length})</option>
+                <option value="On Track">🟢 On Track ({onTrackCount})</option>
+                <option value="At Risk">🟡 At Risk ({atRiskCount})</option>
+                <option value="Delayed">🔴 Delayed ({delayedCount})</option>
+                <option value="Missing Logs">⚠️ Missing Logs ({missingLogsCount})</option>
                 <option value="In Review">In Review (Friday)</option>
                 <option value="Revision Requested">Revision Requested</option>
                 <option value="Approved">Approved</option>
@@ -453,26 +749,26 @@ export default function Dashboard({ userProfile, onLogout }) {
             </div>
           </div>
 
-          {/* Table matching Figma with 5 per page + Story #8 Editor Allocation */}
-          <div className="overflow-x-auto">
-            <table className="w-full text-left border-collapse">
+          {/* Table matching Figma with 5 per page + Story #8 Editor Allocation + Sprint 4 SLA */}
+          <div className="w-full">
+            <table className="w-full text-left border-collapse table-auto">
               <thead>
                 <tr className="border-b border-slate-100 text-[11px] font-bold text-slate-400 uppercase tracking-wider bg-slate-50/50">
-                  <th className="py-3 px-5">Project</th>
-                  <th className="py-3 px-5">Translator</th>
-                  <th className="py-3 px-5">Chief Editor(s)</th>
-                  <th className="py-3 px-5 w-36">Progress</th>
-                  <th className="py-3 px-5 min-w-[130px] whitespace-nowrap">Status</th>
-                  <th className="py-3 px-5">Expected / Est.</th>
-                  <th className="py-3 px-5">Due Date</th>
-                  <th className="py-3 px-5 text-right">Actions</th>
+                  <th className="py-3 px-3.5">Project</th>
+                  <th className="py-3 px-3.5">Translator</th>
+                  <th className="py-3 px-3.5">Chief Editor(s)</th>
+                  <th className="py-3 px-3.5 w-36">Progress (Story #9)</th>
+                  <th className="py-3 px-3.5 min-w-[125px] whitespace-nowrap">Status</th>
+                  <th className="py-3 px-3.5">Expected / Rem.</th>
+                  <th className="py-3 px-3.5">Due Date</th>
+                  <th className="py-3 px-3.5 text-right">Actions</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
                 {currentProjects.length === 0 ? (
                   <tr>
                     <td colSpan="8" className="py-12 text-center text-slate-400 text-xs">
-                      No active projects found.
+                      No active projects found matching the filter.
                     </td>
                   </tr>
                 ) : (
@@ -485,21 +781,23 @@ export default function Dashboard({ userProfile, onLogout }) {
                     };
                     const displayDate = formatDate(project.dueDate || project.createdAt);
                     const progressNum = parseFloat(project.progress != null ? project.progress : 0);
+                    const effectiveProgress = parseFloat(project.effectiveProgress != null ? project.effectiveProgress : progressNum);
+                    const setback = parseFloat(project.correctionSetbackPercentage || 0);
 
                     return (
                       <tr key={project.projectId || idx} className="hover:bg-slate-50/70 transition-colors">
-                        <td className="py-4 px-5">
+                        <td className="py-3.5 px-3.5">
                           <div className="flex items-center gap-2">
                             <span className="text-xs font-bold text-indigo-600">#{project.id}</span>
                             <span className="text-sm font-bold text-slate-900">{project.name}</span>
                           </div>
                         </td>
 
-                        <td className="py-4 px-5 text-xs font-medium text-slate-600">
+                        <td className="py-3.5 px-3.5 text-xs font-medium text-slate-600">
                           {project.translator}
                         </td>
 
-                        <td className="py-4 px-5 whitespace-nowrap">
+                        <td className="py-3.5 px-3.5 whitespace-nowrap">
                           <div className="flex items-center gap-1.5">
                             <span className="px-2 py-0.5 rounded bg-slate-100 text-slate-800 text-xs font-bold border border-slate-200">
                               {project.chiefEditor || 'DD'}
@@ -515,40 +813,60 @@ export default function Dashboard({ userProfile, onLogout }) {
                           </div>
                         </td>
 
-                        <td className="py-4 px-5">
-                          <div className="flex items-center gap-2">
-                            <span className="text-xs font-bold text-slate-800">
-                              {progressNum.toFixed(0)}%
-                            </span>
-                            <div className="flex-1 bg-slate-100 h-1.5 rounded-full overflow-hidden">
+                        <td className="py-3.5 px-3.5">
+                          <div className="space-y-1">
+                            <div className="flex items-center justify-between text-xs font-bold text-slate-800">
+                              <span>{effectiveProgress.toFixed(0)}%</span>
+                              {setback > 0 && (
+                                <span className="text-[10px] text-amber-700 font-bold" title="Rework setback from review rejection">
+                                  +{setback.toFixed(0)}% Setback
+                                </span>
+                              )}
+                            </div>
+                            <div className="w-full bg-slate-100 h-2 rounded-full overflow-hidden flex">
                               <div 
                                 className={`h-full rounded-full transition-all duration-300 ${
                                   project.status === 'Completed' || project.status === 'Approved' ? 'bg-emerald-500' : 'bg-indigo-600'
                                 }`}
-                                style={{ width: `${Math.min(100, progressNum)}%` }}
+                                style={{ width: `${Math.min(100, effectiveProgress)}%` }}
                               />
+                              {setback > 0 && (
+                                <div
+                                  className="bg-amber-400 h-full opacity-85"
+                                  style={{
+                                    width: `${Math.min(100 - effectiveProgress, setback)}%`,
+                                    backgroundImage: 'repeating-linear-gradient(45deg, transparent, transparent 3px, rgba(0,0,0,0.15) 3px, rgba(0,0,0,0.15) 6px)'
+                                  }}
+                                  title={`Correction setback: ${setback}%`}
+                                />
+                              )}
                             </div>
                           </div>
                         </td>
 
-                        <td className="py-4 px-5 min-w-[130px] whitespace-nowrap">
-                          {renderProjectStatusBadge(project)}
+                        <td className="py-3.5 px-3.5 min-w-[125px] whitespace-nowrap">
+                          {renderUnifiedStatusBadge(project)}
                         </td>
 
-                        <td className="py-4 px-5 text-xs font-bold text-slate-800 whitespace-nowrap">
-                          <span>{project.reviewHours != null ? `${project.reviewHours}h` : '68h'}</span>
+                        <td className="py-3.5 px-3.5 text-xs font-bold text-slate-800 whitespace-nowrap">
+                          <span>{project.plannedHours != null ? `${project.plannedHours}h` : (project.reviewHours != null ? `${project.reviewHours}h` : '28h')}</span>
                           {project.remainingHoursEstimate != null && (
                             <span className="block text-[10px] font-semibold text-indigo-600">
-                              Rem. Est: {project.remainingHoursEstimate}h
+                              Rem: {project.remainingHoursEstimate}h ({parseFloat(project.remainingPercentage || (100 - effectiveProgress)).toFixed(0)}%)
                             </span>
                           )}
                         </td>
 
-                        <td className="py-4 px-5 text-xs text-slate-600 font-medium whitespace-nowrap">
-                          {displayDate}
+                        <td className="py-3.5 px-3.5 text-xs font-medium whitespace-nowrap">
+                          <span className={project.healthStatus === 'Delayed' ? 'text-red-600 font-bold' : 'text-slate-600'}>
+                            {displayDate}
+                          </span>
+                          {project.healthStatus === 'Delayed' && (
+                            <span className="block text-[10px] text-red-500 font-bold">Overdue</span>
+                          )}
                         </td>
 
-                        <td className="py-4 px-5 text-right whitespace-nowrap">
+                        <td className="py-3.5 px-3.5 text-right whitespace-nowrap">
                           <button
                             type="button"
                             onClick={() => openReassignModal(project)}
